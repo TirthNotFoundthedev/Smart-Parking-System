@@ -1,14 +1,54 @@
+from contextlib import closing
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import sqlite3
+import time
 import uuid
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from server.logging_config import setup_logging
+
+logger = setup_logging()
+
 app = FastAPI()
 
+# Browser origins allowed to call the API. Override with a comma-separated
+# PARKING_CORS_ORIGINS; the defaults are common local frontend dev servers.
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:3000,http://127.0.0.1:3000,"
+    "http://localhost:5173,http://127.0.0.1:5173"
+)
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("PARKING_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
+
 DB_PATH = Path(__file__).resolve().parents[2] / "parking.db"
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("%s %s failed with an unhandled error", request.method, request.url.path)
+        raise
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    level = logger.warning if response.status_code >= 400 else logger.info
+    level("%s %s -> %s (%.1f ms)", request.method, request.url.path, response.status_code, elapsed_ms)
+    return response
 
 
 def get_db():
@@ -17,7 +57,7 @@ def get_db():
     return conn
 
 
-with get_db() as conn:
+with closing(get_db()) as conn, conn:
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS parkingslots (
@@ -337,7 +377,7 @@ def BookParkingSlot(conn: sqlite3.Connection | None = None):
             SELECT id
             FROM parkingslots
             WHERE digitalstatus = 0 AND physicalstatus = 0
-            ORDER BY id ASC
+            ORDER BY floor ASC, name ASC, id ASC
             LIMIT 1
             """
         )
@@ -382,12 +422,14 @@ def gate_entry(data: GateEntry):
     warning = None
 
     if status_code == 400:
+        logger.warning("Gate entry rejected: no usable number plate or phone number")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Please provide either number plate or phone number.",
         )
     elif status_code == 409:
         warning = "Conflict: Number plate and phone number belong to different users. Prioritized number plate."
+        logger.warning("Gate entry identity conflict for plate %r: using plate-matched user", data.number_plate)
         _, user_data = CheckUser(data.number_plate, None)
 
     conn = get_db()
@@ -412,6 +454,7 @@ def gate_entry(data: GateEntry):
         ).fetchone()
         if active:
             conn.rollback()
+            logger.warning("Gate entry blocked: user %s already has an active booking", user_data["id"])
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="User already has an active parking booking.",
@@ -420,6 +463,7 @@ def gate_entry(data: GateEntry):
         slot_status, parking_slot = BookParkingSlot(conn)
         if slot_status == 404:
             conn.rollback()
+            logger.warning("Gate entry failed: no available parking slots (user %s rolled back)", user_data["id"])
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="No available parking slots.",
@@ -434,11 +478,119 @@ def gate_entry(data: GateEntry):
             ),
         )
         conn.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        conn.rollback()
+        logger.exception("Gate entry failed with an unexpected error")
+        raise
     finally:
         conn.close()
 
+    logger.info(
+        "Gate entry: user %s booked slot %s (%s, floor %s)",
+        user_data["id"],
+        parking_slot["id"],
+        parking_slot["name"],
+        parking_slot["floor"],
+    )
     return {
         "userdata": user_data,
         "parking_slot": parking_slot,
         "warning": warning,
     }
+
+
+#! Gate Exit System
+
+class GateExit(BaseModel):
+    number_plate: str
+    phone_number: str = "NA"
+
+@app.post("/gate-exit")
+def gate_exit(data: GateExit):
+    status_code, user_data = CheckUser(data.number_plate, data.phone_number)
+    warning = None
+
+    if status_code == 400:
+        logger.warning("Gate exit rejected: no usable number plate or phone number")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please provide either number plate or phone number.",
+        )
+    elif status_code == 404:
+        logger.warning("Gate exit failed: no user matches plate %r / phone %r", data.number_plate, data.phone_number)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+    elif status_code == 409:
+        warning = "Conflict: Number plate and phone number belong to different users. Prioritized number plate."
+        logger.warning("Gate exit identity conflict for plate %r: using plate-matched user", data.number_plate)
+        _, user_data = CheckUser(data.number_plate, None)
+
+    conn = get_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        active = conn.execute(
+            "SELECT id, slotid, starttime FROM logs WHERE userid = ? AND endtime IS NULL",
+            (user_data["id"],),
+        ).fetchone()
+        if active is None:
+            conn.rollback()
+            logger.warning("Gate exit failed: user %s has no active booking", user_data["id"])
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User has no active parking booking.",
+            )
+
+        endtime = datetime.now(timezone.utc).isoformat()
+        conn.execute("UPDATE logs SET endtime = ? WHERE id = ?", (endtime, active["id"]))
+        conn.execute("UPDATE parkingslots SET digitalstatus = 0 WHERE id = ?", (active["slotid"],))
+        slot = conn.execute(
+            "SELECT * FROM parkingslots WHERE id = ?", (active["slotid"],)
+        ).fetchone()
+        conn.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        conn.rollback()
+        logger.exception("Gate exit failed with an unexpected error")
+        raise
+    finally:
+        conn.close()
+
+    logger.info("Gate exit: user %s released slot %s", user_data["id"], active["slotid"])
+    return {
+        "userdata": user_data,
+        "parking_slot": dict(slot) if slot else None,
+        "log": {
+            "id": active["id"],
+            "slotid": active["slotid"],
+            "starttime": active["starttime"],
+            "endtime": endtime,
+            "userid": user_data["id"],
+        },
+        "warning": warning,
+    }
+
+
+#! Log history
+
+@app.get("/logs")
+def list_logs(user_id: str | None = None, active: bool | None = None, limit: int = 100):
+    """Entry/exit history, newest first. `active=true` lists open entries only."""
+    query = "SELECT * FROM logs"
+    clauses, params = [], []
+    if user_id is not None:
+        clauses.append("userid = ?")
+        params.append(user_id)
+    if active is not None:
+        clauses.append("endtime IS NULL" if active else "endtime IS NOT NULL")
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY starttime DESC LIMIT ?"
+    params.append(max(1, min(limit, 1000)))
+
+    with closing(get_db()) as conn:
+        return [dict(row) for row in conn.execute(query, params).fetchall()]
