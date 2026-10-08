@@ -25,6 +25,8 @@ OpenAPI schema is at `{BASE_URL}/openapi.json`.
 | `GET` | `/health` | Check whether the API is responding. |
 | `GET` | `/parking-slots` | List all parking slots. |
 | `POST` | `/gate-entry` | Find or create a user and book one available slot. |
+| `POST` | `/gate-exit` | Close the user's active booking and free the slot. |
+| `GET` | `/logs` | List entry/exit log rows, newest first. |
 | `GET` | `/dashboard/gate-entry` | Browser test page that submits to `POST /gate-entry`. |
 | `GET` | `/` | Basic server greeting. |
 
@@ -120,6 +122,7 @@ includes a warning. If neither matches, it creates a user and then attempts to
 book a slot.
 
 A slot is bookable when `digitalstatus` and `physicalstatus` are both `0`.
+Bookable slots are assigned in order of `floor`, then `name`, then `id`.
 On success the server changes `digitalstatus` to `1` and writes an open row
 (`endtime` NULL) to the `logs` table. A user who already has an open log row
 cannot book again until it is closed. If no slot can be booked,
@@ -189,14 +192,12 @@ errors.
 
 ## Browser integration and CORS
 
-CORS is not currently configured by this server. A browser frontend served
-from a different origin (for example, a different port such as
-`http://localhost:3000`) may have its API request blocked by the browser until
-the backend explicitly allows that frontend origin. For local testing, a
-same-origin setup or a frontend development-server proxy avoids this; for
-separate origins, ask the backend maintainer to configure FastAPI CORS for the
-frontend's exact development and production origins. Do not disable browser
-security checks.
+CORS is enabled for `GET` and `POST` from these origins by default:
+`http://localhost:3000`, `http://127.0.0.1:3000`, `http://localhost:5173`
+and `http://127.0.0.1:5173`. Set `PARKING_CORS_ORIGINS` to a comma-separated
+list of exact origins to replace them (for example the production frontend).
+Requests from other origins are blocked by the browser. Do not disable
+browser security checks.
 
 Example frontend request:
 
@@ -228,8 +229,47 @@ if (result.warning) {
 console.log("Assigned slot:", result.parking_slot);
 ```
 
+## Gate exit
+
+### `POST /gate-exit`
+
+Send JSON with the same identifiers as gate entry (`number_plate` required,
+`phone_number` optional, `"NA"` meaning missing). The user is resolved the
+same way, including the plate-priority conflict warning. The server then, in
+one transaction, sets `endtime` on the user's open `logs` row and sets the
+slot's `digitalstatus` back to `0`. The user can enter again afterwards, which
+writes a new log row.
+
+Response (`200 OK`):
+
+```json
+{
+  "userdata": { "id": "user-id", "name": "Alex", "numberplate": "ABC123", "phonenumber": "5551000" },
+  "parking_slot": { "id": "slot-001", "name": "SLOT-001", "digitalstatus": 0, "physicalstatus": 0, "floor": "B1" },
+  "log": { "id": "log-id", "slotid": "slot-001", "starttime": "2026-10-08T10:00:00+00:00", "endtime": "2026-10-08T12:00:00+00:00", "userid": "user-id" },
+  "warning": null
+}
+```
+
+| HTTP status | Meaning |
+| --- | --- |
+| `400 Bad Request` | Both identifiers are absent or `"NA"`. |
+| `404 Not Found` | `"User not found."` or `"User has no active parking booking."` |
+| `422 Unprocessable Entity` | Invalid JSON or field types. |
+
+## Entry/exit log
+
+Each entry writes a `logs` row with `starttime` (UTC ISO 8601) and no
+`endtime`; the matching exit fills in `endtime`. One row is one parking visit.
+
+### `GET /logs`
+
+Returns an array of log rows, newest first (`id`, `slotid`, `starttime`,
+`endtime`, `userid`). Optional query parameters: `user_id`, `active`
+(`true` = open entries only, `false` = completed visits only), and `limit`
+(default 100, clamped to 1-1000).
+
 ## Not currently implemented
 
-The API currently has no endpoint to release a slot, register an exit, view a
-user's booking history, or read log records (logs are written on entry only). Do not assume a successful
-gate-entry response provides those capabilities.
+The API has no endpoint to read a user's profile or to update
+`physicalstatus`; that value is never written by the backend.
