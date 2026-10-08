@@ -205,6 +205,20 @@ class SensorTests(unittest.TestCase):
             codes = [self.client.get("/my-slot", params={"plate": "X"}).status_code for _ in range(3)]
         self.assertEqual(codes, [404, 404, 429])
 
+    def test_bookings_list_joins_user_and_slot_and_filters_by_active(self):
+        self.enter("ABC123")
+        self.enter("XYZ789")
+        self.client.post("/gate-exit", json={"number_plate": "ABC123"})
+
+        active = self.client.get("/bookings", params={"active": "true"}).json()
+        done = self.client.get("/bookings", params={"active": "false"}).json()
+
+        self.assertEqual([b["numberplate"] for b in active], ["XYZ789"])
+        self.assertEqual(active[0]["floor"], "B1")
+        self.assertEqual(active[0]["status"], "assigned")
+        self.assertEqual([b["numberplate"] for b in done], ["ABC123"])
+        self.assertEqual(len(self.client.get("/bookings").json()), 2)
+
     def test_availability_counts_per_floor(self):
         self.enter()
         self.assertEqual(self.client.get("/availability").json(), [{"floor": "B1", "total": 2, "free": 1}])

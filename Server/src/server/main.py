@@ -347,7 +347,12 @@ def parking_slots():
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM parkingslots")
+        cur.execute(
+            """
+            SELECT p.*, COALESCE(s.state, 'ok') AS sensor_state
+            FROM parkingslots p LEFT JOIN slot_sensors s ON s.slotid = p.id
+            """
+        )
         rows = cur.fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -828,3 +833,30 @@ def resolve_alert(alert_id: str):
         if cur.rowcount != 1:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No open alert with that id.")
     return {"resolved": alert_id}
+
+
+#! Booking list (guard view)
+
+@app.get("/bookings")
+def list_bookings(active: bool | None = None, limit: int = 100):
+    """Bookings with the driver and slot attached, newest first.
+
+    `active=true` lists cars that are assigned or parked; `active=false` lists
+    finished ones (completed, no-show, cancelled).
+    """
+    query = """
+        SELECT b.id, b.kind, b.status, b.start_time, b.expires_at,
+               u.id AS userid, u.name AS username, u.numberplate, u.phonenumber,
+               p.id AS slotid, p.name AS slotname, p.floor
+        FROM bookings b
+        JOIN users u ON u.id = b.userid
+        JOIN parkingslots p ON p.id = b.slotid
+    """
+    if active is True:
+        query += " WHERE b.status IN ('assigned', 'parked')"
+    elif active is False:
+        query += " WHERE b.status NOT IN ('assigned', 'parked')"
+    query += " ORDER BY b.start_time DESC LIMIT ?"
+    with closing(get_db()) as conn:
+        rows = conn.execute(query, (max(1, min(limit, 1000)),)).fetchall()
+    return [dict(row) for row in rows]

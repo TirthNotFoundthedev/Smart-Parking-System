@@ -74,7 +74,8 @@ Example (`200 OK`):
 ```
 
 `digitalstatus` and `physicalstatus` are SQLite boolean values and are
-typically serialized as `0` (false) or `1` (true). A slot is eligible for
+typically serialized as `0` (false) or `1` (true). `sensor_state` is `ok`,
+`unknown` (node offline) or `fault`; slots without a sensor mapping report `ok`. A slot is eligible for
 booking only when both values are `0`.
 
 ## Gate entry and slot booking
@@ -306,6 +307,13 @@ for a wrong key.
 
 An occupied slot with no active booking raises an `unbooked_car` alert, which
 clears when the slot is vacated.
+
+## Booking list
+
+`GET /bookings` returns bookings with the driver and slot attached (`kind`,
+`status`, `start_time`, `expires_at`, `username`, `numberplate`, `phonenumber`,
+`slotid`, `slotname`, `floor`), newest first. `active=true` lists assigned or
+parked cars; `active=false` lists finished ones. `limit` defaults to 100.
 
 ## Guard alerts
 
