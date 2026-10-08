@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Server test results - PASSED</title>
+  <style>
+    :root { color-scheme: light dark; font: 15px/1.5 system-ui, sans-serif; }
+    body { max-width: 1050px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: .25rem; }
+    .muted { color: #777; }
+    .summary { display: flex; flex-wrap: wrap; gap: .7rem; margin: 1.5rem 0; }
+    .card { min-width: 90px; padding: .7rem 1rem; border-radius: 8px; background: #eee; color: #222; }
+    .card strong, .card span { display: block; }
+    .card strong { font-size: 1.5rem; }
+    .card.pass { background: #dcfce7; } .card.fail, .card.error, .card.xpass { background: #fee2e2; }
+    .card.xfail { background: #fef3c7; } .card.skip { background: #e0e7ff; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; vertical-align: top; padding: .65rem; border-bottom: 1px solid #bbb; }
+    th { position: sticky; top: 0; background: Canvas; }
+    .badge { font-weight: 700; }
+    tr.FAIL .badge, tr.ERROR .badge, tr.XPASS .badge { color: #c00; }
+    tr.XFAIL .badge { color: #9a6700; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 28rem; overflow: auto; }
+    @media (prefers-color-scheme: dark) {
+      .card { background: #333; color: #eee; } .card.pass { background: #164b2c; }
+      .card.fail, .card.error, .card.xpass { background: #5a2020; } .card.xfail { background: #594611; }
+      .card.skip { background: #292e50; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Test results: PASSED</h1>
+  <p class="muted">Generated 2026-09-29 16:21:42 India Standard Time · 18 test(s)</p>
+  <section class="summary"><div class='card pass'><strong>18</strong><span>PASS</span></div></section>
+  <table>
+    <thead><tr><th>Result</th><th>Test case</th><th>Failure / note</th></tr></thead>
+    <tbody><tr class='PASS'><td><span class='badge'>PASS</span></td><td>existing user can be found by phone with na plate</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>existing user can be found by plate only</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>existing user is used when only phone matches</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>existing user is used when only plate matches</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>existing user matching both identifiers can enter</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>full lot does not leave a new user behind</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>full lot returns not found for existing user</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>malformed json is rejected</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>missing number plate is rejected by request validation</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>multiple entries book different available slots</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>new user name defaults to na</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>no identifiers returns bad request</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>null number plate is rejected by request validation</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>plate and phone conflict prioritizes plate user</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>response slot status reflects the committed booking</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>slot is not booked if either status marks it unavailable</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>unknown identifiers create user and book slot</td><td></td></tr><tr class='PASS'><td><span class='badge'>PASS</span></td><td>wrong field types are rejected</td><td></td></tr></tbody>
+  </table>
+</body>
+</html>
