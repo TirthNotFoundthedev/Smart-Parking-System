@@ -363,6 +363,35 @@ class GateEntryTests(unittest.TestCase):
         )
         self.assertEqual(response.json()["parking_slot"]["digitalstatus"], 1)
 
+    def log_rows(self):
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.row_factory = sqlite3.Row
+            return [dict(r) for r in conn.execute("SELECT * FROM logs")]
+
+    def test_successful_entry_writes_an_open_log_row(self):
+        self.add_slot()
+
+        response = self.client.post("/gate-entry", json={"number_plate": "LOG123"})
+
+        self.assertEqual(response.status_code, 200)
+        logs = self.log_rows()
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0]["slotid"], "slot-1")
+        self.assertEqual(logs[0]["userid"], response.json()["userdata"]["id"])
+        self.assertIsNone(logs[0]["endtime"])
+
+    def test_user_with_active_booking_cannot_book_a_second_slot(self):
+        self.add_slot()
+        self.add_slot(slot_id="slot-2", name="SLOT-002")
+
+        first = self.client.post("/gate-entry", json={"number_plate": "DUP123"})
+        second = self.client.post("/gate-entry", json={"number_plate": "DUP123"})
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 409)
+        self.assertEqual(self.get_slot("slot-2")["digitalstatus"], 0)
+        self.assertEqual(len(self.log_rows()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

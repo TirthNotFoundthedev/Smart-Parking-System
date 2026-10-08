@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-server = "server:main"
+server = "server:run"
 
 [build-system]
 requires = ["uv_build>=0.12.16,<0.13.0"]

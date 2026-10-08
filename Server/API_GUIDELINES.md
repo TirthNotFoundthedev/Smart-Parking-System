@@ -120,7 +120,9 @@ includes a warning. If neither matches, it creates a user and then attempts to
 book a slot.
 
 A slot is bookable when `digitalstatus` and `physicalstatus` are both `0`.
-On success the server changes `digitalstatus` to `1`. If no slot can be booked,
+On success the server changes `digitalstatus` to `1` and writes an open row
+(`endtime` NULL) to the `logs` table. A user who already has an open log row
+cannot book again until it is closed. If no slot can be booked,
 the request fails and a newly created user is rolled back with the booking.
 
 ### Successful response
@@ -176,6 +178,7 @@ Content-Type: application/json
 | HTTP status | Meaning | Example response |
 | --- | --- | --- |
 | `400 Bad Request` | Both identifiers are absent or treated as `"NA"`. | `{"detail":"Please provide either number plate or phone number."}` |
+| `409 Conflict` | The user already has an active booking. | `{"detail":"User already has an active parking booking."}` |
 | `404 Not Found` | No available parking slot could be booked. | `{"detail":"No available parking slots."}` |
 | `422 Unprocessable Entity` | Invalid JSON, missing required `number_plate`, or a field has the wrong type. | FastAPI validation response with a `detail` array. |
 | `500 Internal Server Error` | An unexpected server or database error occurred. | Error response; do not assume the request succeeded. |
@@ -228,5 +231,5 @@ console.log("Assigned slot:", result.parking_slot);
 ## Not currently implemented
 
 The API currently has no endpoint to release a slot, register an exit, view a
-user's booking history, or create/read log records. Do not assume a successful
+user's booking history, or read log records (logs are written on entry only). Do not assume a successful
 gate-entry response provides those capabilities.

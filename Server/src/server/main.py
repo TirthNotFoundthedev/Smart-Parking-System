@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 import uuid
@@ -405,6 +406,17 @@ def gate_entry(data: GateEntry):
                 "phonenumber": data.phone_number,
             }
 
+        active = conn.execute(
+            "SELECT slotid FROM logs WHERE userid = ? AND endtime IS NULL",
+            (user_data["id"],),
+        ).fetchone()
+        if active:
+            conn.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="User already has an active parking booking.",
+            )
+
         slot_status, parking_slot = BookParkingSlot(conn)
         if slot_status == 404:
             conn.rollback()
@@ -412,6 +424,15 @@ def gate_entry(data: GateEntry):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="No available parking slots.",
             )
+        conn.execute(
+            "INSERT INTO logs (id, slotid, starttime, userid) VALUES (?, ?, ?, ?)",
+            (
+                str(uuid.uuid4()),
+                parking_slot["id"],
+                datetime.now(timezone.utc).isoformat(),
+                user_data["id"],
+            ),
+        )
         conn.commit()
     finally:
         conn.close()
