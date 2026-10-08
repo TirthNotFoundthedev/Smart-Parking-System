@@ -74,7 +74,8 @@ Example (`200 OK`):
 ```
 
 `digitalstatus` and `physicalstatus` are SQLite boolean values and are
-typically serialized as `0` (false) or `1` (true). A slot is eligible for
+typically serialized as `0` (false) or `1` (true). `sensor_state` is `ok`,
+`unknown` (node offline) or `fault`; slots without a sensor mapping report `ok`. A slot is eligible for
 booking only when both values are `0`.
 
 ## Gate entry and slot booking
@@ -196,7 +197,8 @@ CORS is enabled for `GET` and `POST` from these origins by default:
 `http://localhost:3000`, `http://127.0.0.1:3000`, `http://localhost:5173`
 and `http://127.0.0.1:5173`. Set `PARKING_CORS_ORIGINS` to a comma-separated
 list of exact origins to replace them (for example the production frontend).
-Requests from other origins are blocked by the browser. Do not disable
+Allowed request headers are `Content-Type` and `X-Gateway-Key` (so a browser-based
+sensor simulator can call the gateway endpoints). Requests from other origins are blocked by the browser. Do not disable
 browser security checks.
 
 Example frontend request:
@@ -269,7 +271,58 @@ Returns an array of log rows, newest first (`id`, `slotid`, `starttime`,
 (`true` = open entries only, `false` = completed visits only), and `limit`
 (default 100, clamped to 1-1000).
 
+## Bookings and no-shows
+
+`POST /gate-entry` also writes a `bookings` row (`kind: walkin`, status
+`assigned`) with `expires_at` 15 minutes ahead. A background task (every
+`PARKING_EXPIRY_INTERVAL` seconds, default 30) marks assigned bookings that
+were never parked as `noshow`, sets the slot's `digitalstatus` back to `0` and
+closes the log row. When the sensor reports the car, the booking becomes
+`parked` and never expires; `POST /gate-exit` sets it to `completed`.
+
+## Driver endpoints
+
+### `GET /my-slot?plate=ABC123`
+
+Returns the active booking for the plate: `parking_slot`, `booking_status`
+(`assigned` or `parked`), `expires_at` (only while `assigned`) and a
+`directions` string. `404` when the plate is unknown or has no active booking;
+`429` after 10 lookups per minute from one client.
+
+### `GET /availability`
+
+Array of `{floor, total, free}`. A slot is free only when both statuses are `0`
+and its sensor is not `unknown`/`fault`.
+
+## Gateway endpoints
+
+These require the `X-Gateway-Key` header to equal the `PARKING_GATEWAY_KEY`
+environment variable. They return `503` when the variable is unset and `401`
+for a wrong key.
+
+| Method | Path | Body | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/gateway/slot-map` | `[{slot_id, node, channel}]` | Map slots to Arduino node + sensor channel. `409` if the node/channel is taken, `404` for an unknown slot. |
+| `POST` | `/sensor-events` | `[{slot_id \| node+channel, occupied}]` | Write `physicalstatus`. Returns `{applied: [{index, slot_id, outcome}], rejected: [...]}`. Outcome is `parked`, `unbooked`, `occupied` or `vacated`. |
+| `POST` | `/gateway/heartbeat` | `{nodes: [{node, online}]}` | Offline nodes make their slots `unknown` (not assignable) and raise a `node_offline` alert. |
+
+An occupied slot with no active booking raises an `unbooked_car` alert, which
+clears when the slot is vacated.
+
+## Booking list
+
+`GET /bookings` returns bookings with the driver and slot attached (`kind`,
+`status`, `start_time`, `expires_at`, `username`, `numberplate`, `phonenumber`,
+`slotid`, `slotname`, `floor`), newest first. `active=true` lists assigned or
+parked cars; `active=false` lists finished ones. `limit` defaults to 100.
+
+## Guard alerts
+
+`GET /alerts` lists open alerts, newest first (`?open=false` for resolved
+ones). `POST /alerts/{id}/resolve` closes one (`404` if not open). These have
+no authentication yet; guard login is a later step.
+
 ## Not currently implemented
 
-The API has no endpoint to read a user's profile or to update
-`physicalstatus`; that value is never written by the backend.
+Reservations, driver accounts, strikes and bans, and guard login (see
+`../ARCHITECTURE.md`).

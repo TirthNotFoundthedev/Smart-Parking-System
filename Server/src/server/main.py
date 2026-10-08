@@ -1,20 +1,55 @@
-from contextlib import closing
+import asyncio
+from collections import defaultdict, deque
+from contextlib import asynccontextmanager, closing
 from datetime import datetime, timezone
+import hmac
 import os
 from pathlib import Path
 import sqlite3
 import time
 import uuid
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from server import bookings
 from server.logging_config import setup_logging
 
 logger = setup_logging()
 
-app = FastAPI()
+# How often the no-show sweeper runs. PARKING_EXPIRY_INTERVAL is in seconds.
+EXPIRY_INTERVAL_SECONDS = float(os.environ.get("PARKING_EXPIRY_INTERVAL", "30"))
+
+
+def expire_no_shows() -> int:
+    with closing(get_db()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        expired = bookings.expire_bookings(conn)
+    for booking in expired:
+        logger.info("No-show: booking %s released slot %s", booking["id"], booking["slotid"])
+    return len(expired)
+
+
+async def _expiry_loop():
+    while True:
+        await asyncio.sleep(EXPIRY_INTERVAL_SECONDS)
+        try:
+            await asyncio.to_thread(expire_no_shows)
+        except Exception:
+            logger.exception("No-show sweep failed")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    task = asyncio.create_task(_expiry_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
+app = FastAPI(lifespan=lifespan)
 
 # Browser origins allowed to call the API. Override with a comma-separated
 # PARKING_CORS_ORIGINS; the defaults are common local frontend dev servers.
@@ -31,7 +66,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-Gateway-Key"],
 )
 
 DB_PATH = Path(__file__).resolve().parents[2] / "parking.db"
@@ -57,7 +92,13 @@ def get_db():
     return conn
 
 
-with closing(get_db()) as conn, conn:
+def init_db():
+    with closing(get_db()) as conn, conn:
+        _create_base_tables(conn)
+        bookings.init_schema(conn)
+
+
+def _create_base_tables(conn):
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS parkingslots (
@@ -81,7 +122,10 @@ with closing(get_db()) as conn, conn:
             phonenumber TEXT NOT NULL
         );
         """
-)
+    )
+
+
+init_db()
 
 
 @app.get("/")
@@ -303,7 +347,12 @@ def parking_slots():
     conn = get_db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM parkingslots")
+        cur.execute(
+            """
+            SELECT p.*, COALESCE(s.state, 'ok') AS sensor_state
+            FROM parkingslots p LEFT JOIN slot_sensors s ON s.slotid = p.id
+            """
+        )
         rows = cur.fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -377,6 +426,10 @@ def BookParkingSlot(conn: sqlite3.Connection | None = None):
             SELECT id
             FROM parkingslots
             WHERE digitalstatus = 0 AND physicalstatus = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM slot_sensors s
+                  WHERE s.slotid = parkingslots.id AND s.state != 'ok'
+              )
             ORDER BY floor ASC, name ASC, id ASC
             LIMIT 1
             """
@@ -468,15 +521,17 @@ def gate_entry(data: GateEntry):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="No available parking slots.",
             )
+        entered_at = datetime.now(timezone.utc)
         conn.execute(
             "INSERT INTO logs (id, slotid, starttime, userid) VALUES (?, ?, ?, ?)",
             (
                 str(uuid.uuid4()),
                 parking_slot["id"],
-                datetime.now(timezone.utc).isoformat(),
+                entered_at.isoformat(),
                 user_data["id"],
             ),
         )
+        bookings.create_walkin_booking(conn, user_data["id"], parking_slot["id"], entered_at)
         conn.commit()
     except HTTPException:
         raise
@@ -547,6 +602,7 @@ def gate_exit(data: GateExit):
         endtime = datetime.now(timezone.utc).isoformat()
         conn.execute("UPDATE logs SET endtime = ? WHERE id = ?", (endtime, active["id"]))
         conn.execute("UPDATE parkingslots SET digitalstatus = 0 WHERE id = ?", (active["slotid"],))
+        bookings.complete_active_booking(conn, user_data["id"], active["slotid"])
         slot = conn.execute(
             "SELECT * FROM parkingslots WHERE id = ?", (active["slotid"],)
         ).fetchone()
@@ -594,3 +650,213 @@ def list_logs(user_id: str | None = None, active: bool | None = None, limit: int
 
     with closing(get_db()) as conn:
         return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+#! Gateway (sensor ingest)
+
+def require_gateway_key(x_gateway_key: str | None):
+    expected = os.environ.get("PARKING_GATEWAY_KEY")
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Gateway access is not configured (set PARKING_GATEWAY_KEY).",
+        )
+    if x_gateway_key is None or not hmac.compare_digest(x_gateway_key, expected):
+        logger.warning("Gateway request rejected: bad or missing X-Gateway-Key")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid gateway key.",
+        )
+
+
+class SlotMapEntry(BaseModel):
+    slot_id: str
+    node: int
+    channel: int
+
+
+@app.post("/gateway/slot-map")
+def set_slot_map(entries: list[SlotMapEntry], x_gateway_key: str | None = Header(default=None)):
+    """Map each slot to the Arduino node and sensor channel that watches it."""
+    require_gateway_key(x_gateway_key)
+    with closing(get_db()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        for entry in entries:
+            if conn.execute("SELECT 1 FROM parkingslots WHERE id = ?", (entry.slot_id,)).fetchone() is None:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Unknown slot {entry.slot_id!r}.",
+                )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO slot_sensors (slotid, node_id, channel) VALUES (?, ?, ?)
+                    ON CONFLICT(slotid) DO UPDATE SET node_id = excluded.node_id, channel = excluded.channel
+                    """,
+                    (entry.slot_id, entry.node, entry.channel),
+                )
+            except sqlite3.IntegrityError:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Node {entry.node} channel {entry.channel} is already mapped to another slot.",
+                )
+    return {"mapped": len(entries)}
+
+
+class SensorEvent(BaseModel):
+    """A slot reading, addressed by slot_id or by node + channel."""
+    slot_id: str | None = None
+    node: int | None = None
+    channel: int | None = None
+    occupied: bool
+
+
+@app.post("/sensor-events")
+def sensor_events(events: list[SensorEvent], x_gateway_key: str | None = Header(default=None)):
+    """Gateway pushes slot state changes. Unknown slots are reported, not fatal."""
+    require_gateway_key(x_gateway_key)
+    results, rejected = [], []
+    with closing(get_db()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        for index, event in enumerate(events):
+            slot_id = bookings.resolve_slot_id(conn, event.slot_id, event.node, event.channel)
+            if slot_id is None:
+                rejected.append({"index": index, "reason": "Unknown slot or unmapped node/channel."})
+                continue
+            outcome = bookings.apply_sensor_event(conn, slot_id, event.occupied)
+            results.append({"index": index, "slot_id": slot_id, "outcome": outcome})
+            if outcome == "unbooked":
+                logger.warning("Alert: car in slot %s with no booking", slot_id)
+    return {"applied": results, "rejected": rejected}
+
+
+class NodeStatus(BaseModel):
+    node: int
+    online: bool
+
+
+class Heartbeat(BaseModel):
+    nodes: list[NodeStatus]
+
+
+@app.post("/gateway/heartbeat")
+def gateway_heartbeat(data: Heartbeat, x_gateway_key: str | None = Header(default=None)):
+    """Report which nodes answered their last poll. Offline nodes make their slots unassignable."""
+    require_gateway_key(x_gateway_key)
+    with closing(get_db()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        for node in data.nodes:
+            bookings.set_node_online(conn, node.node, node.online)
+            if not node.online:
+                logger.warning("Node %s reported offline", node.node)
+    return {"nodes": len(data.nodes)}
+
+
+#! Drivers
+
+MY_SLOT_LIMIT_PER_MINUTE = 10
+_my_slot_hits: dict[str, deque] = defaultdict(deque)
+
+
+def _rate_limited(client: str) -> bool:
+    now = time.monotonic()
+    hits = _my_slot_hits[client]
+    while hits and now - hits[0] > 60:
+        hits.popleft()
+    if len(hits) >= MY_SLOT_LIMIT_PER_MINUTE:
+        return True
+    hits.append(now)
+    return False
+
+
+@app.get("/my-slot")
+def my_slot(plate: str, request: Request):
+    """Where did I park? Looks up the active booking by number plate."""
+    client = request.client.host if request.client else "unknown"
+    if _rate_limited(client):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many lookups. Try again in a minute.",
+        )
+    plate = plate.strip()
+    status_code, user = CheckUser(plate, None)
+    if status_code != 200:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active booking for this plate.")
+    with closing(get_db()) as conn:
+        booking = bookings.active_booking_for_user(conn, user["id"])
+        if booking is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active booking for this plate.")
+        slot = dict(conn.execute("SELECT * FROM parkingslots WHERE id = ?", (booking["slotid"],)).fetchone())
+    return {
+        "parking_slot": slot,
+        "booking_status": booking["status"],
+        "expires_at": booking["expires_at"] if booking["status"] == "assigned" else None,
+        "directions": bookings.directions(slot),
+    }
+
+
+@app.get("/availability")
+def availability():
+    """Free and total slot counts per floor. Offline-sensor slots count as not free."""
+    with closing(get_db()) as conn:
+        rows = conn.execute(
+            """
+            SELECT p.floor AS floor, COUNT(*) AS total,
+                   SUM(CASE WHEN p.digitalstatus = 0 AND p.physicalstatus = 0
+                             AND COALESCE(s.state, 'ok') = 'ok' THEN 1 ELSE 0 END) AS free
+            FROM parkingslots p LEFT JOIN slot_sensors s ON s.slotid = p.id
+            GROUP BY p.floor ORDER BY p.floor
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+#! Guard alerts (no guard auth yet; planned with the guard login)
+
+@app.get("/alerts")
+def list_alerts(open: bool = True):
+    """Guard alerts, newest first. `open=false` lists resolved ones."""
+    clause = "resolved_at IS NULL" if open else "resolved_at IS NOT NULL"
+    with closing(get_db()) as conn:
+        rows = conn.execute(f"SELECT * FROM alerts WHERE {clause} ORDER BY created_at DESC").fetchall()
+    return [dict(row) for row in rows]
+
+
+@app.post("/alerts/{alert_id}/resolve")
+def resolve_alert(alert_id: str):
+    with closing(get_db()) as conn, conn:
+        cur = conn.execute(
+            "UPDATE alerts SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL",
+            (bookings.utcnow().isoformat(), alert_id),
+        )
+        if cur.rowcount != 1:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No open alert with that id.")
+    return {"resolved": alert_id}
+
+
+#! Booking list (guard view)
+
+@app.get("/bookings")
+def list_bookings(active: bool | None = None, limit: int = 100):
+    """Bookings with the driver and slot attached, newest first.
+
+    `active=true` lists cars that are assigned or parked; `active=false` lists
+    finished ones (completed, no-show, cancelled).
+    """
+    query = """
+        SELECT b.id, b.kind, b.status, b.start_time, b.expires_at,
+               u.id AS userid, u.name AS username, u.numberplate, u.phonenumber,
+               p.id AS slotid, p.name AS slotname, p.floor
+        FROM bookings b
+        JOIN users u ON u.id = b.userid
+        JOIN parkingslots p ON p.id = b.slotid
+    """
+    if active is True:
+        query += " WHERE b.status IN ('assigned', 'parked')"
+    elif active is False:
+        query += " WHERE b.status NOT IN ('assigned', 'parked')"
+    query += " ORDER BY b.start_time DESC LIMIT ?"
+    with closing(get_db()) as conn:
+        rows = conn.execute(query, (max(1, min(limit, 1000)),)).fetchall()
+    return [dict(row) for row in rows]

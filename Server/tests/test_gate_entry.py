@@ -46,6 +46,7 @@ class GateEntryTests(unittest.TestCase):
                 """
             )
 
+        main.init_db()
         self.client = TestClient(main.app)
 
     def add_user(
