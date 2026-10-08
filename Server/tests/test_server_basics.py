@@ -38,6 +38,7 @@ class ServerBasicsTests(unittest.TestCase):
                 );
                 """
             )
+        main.init_db()
         self.client = TestClient(main.app)
 
     def add_slot(self, slot_id, name, floor):

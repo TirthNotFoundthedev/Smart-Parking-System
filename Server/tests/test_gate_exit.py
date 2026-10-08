@@ -39,6 +39,7 @@ class GateExitTests(unittest.TestCase):
                 INSERT INTO parkingslots VALUES ('slot-1', 'SLOT-001', 0, 0, 'B1');
                 """
             )
+        main.init_db()
         self.client = TestClient(main.app)
 
     def query(self, sql, params=()):
