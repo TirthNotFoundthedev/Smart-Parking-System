@@ -219,6 +219,18 @@ class SensorTests(unittest.TestCase):
         self.assertEqual([b["numberplate"] for b in done], ["ABC123"])
         self.assertEqual(len(self.client.get("/bookings").json()), 2)
 
+    def test_cors_preflight_allows_gateway_key_header_for_browser_simulators(self):
+        response = self.client.options(
+            "/sensor-events",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type,x-gateway-key",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("x-gateway-key", response.headers["access-control-allow-headers"].lower())
+
     def test_availability_counts_per_floor(self):
         self.enter()
         self.assertEqual(self.client.get("/availability").json(), [{"floor": "B1", "total": 2, "free": 1}])

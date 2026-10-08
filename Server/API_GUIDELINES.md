@@ -197,7 +197,8 @@ CORS is enabled for `GET` and `POST` from these origins by default:
 `http://localhost:3000`, `http://127.0.0.1:3000`, `http://localhost:5173`
 and `http://127.0.0.1:5173`. Set `PARKING_CORS_ORIGINS` to a comma-separated
 list of exact origins to replace them (for example the production frontend).
-Requests from other origins are blocked by the browser. Do not disable
+Allowed request headers are `Content-Type` and `X-Gateway-Key` (so a browser-based
+sensor simulator can call the gateway endpoints). Requests from other origins are blocked by the browser. Do not disable
 browser security checks.
 
 Example frontend request:

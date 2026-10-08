@@ -66,7 +66,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-Gateway-Key"],
 )
 
 DB_PATH = Path(__file__).resolve().parents[2] / "parking.db"
