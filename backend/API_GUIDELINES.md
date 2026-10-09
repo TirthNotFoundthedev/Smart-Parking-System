@@ -1,319 +1,304 @@
 # Parking Server API Guidelines
 
-This guide describes the HTTP API currently implemented by the FastAPI server.
-The server is API-only and uses JSON. `POST /gate-entry` requires a guard
-login token; the sensor endpoint and the read endpoints are public.
+This guide describes the HTTP API implemented by the FastAPI server in
+`src/server/main.py` (booking logic in `bookings.py`). The server is API-only
+and uses JSON. Interactive docs are at `{BASE_URL}/docs` and the schema at
+`{BASE_URL}/openapi.json`.
 
 ## Base URL
 
-Use the host and port printed when the server starts. For example:
+Use the host and port printed when the server starts, for example
+`http://127.0.0.1:5000` (`startserver.ps1 -Port` changes it). Do not assume
+another service on the same machine is the parking API. Paths below are
+relative to the base URL.
 
-```text
-http://127.0.0.1:5000
-```
+## Access levels
 
-The project has also been run on port `5050`; use whichever port belongs to
-this server instance. Do not assume that another service on the same machine
-is the parking API.
-
-Interactive API documentation is available at `{BASE_URL}/docs`, and the
-OpenAPI schema is at `{BASE_URL}/openapi.json`.
-
-## Endpoints
-
-| Method | Path | Purpose |
+| Level | How to authenticate | Endpoints |
 | --- | --- | --- |
-| `GET` | `/health` | Check whether the API is responding. |
-| `GET` | `/parking-slots` | List all parking slots. |
-| `GET` | `/parking-status` | Active booking, time parked and cost for a number plate. |
-| `POST` | `/guard/login` | Log in as the guard and receive a bearer token. |
-| `POST` | `/gate-entry` | Find or create a user and book one available slot. Requires a guard token. |
-| `PUT` | `/sensor/slots/{slot_id}` | Set a slot's physical occupancy, as a hardware sensor does. Public. |
-| `GET` | `/` | Basic server greeting. |
+| Public | Nothing | `GET /`, `/health`, `/parking-slots`, `/parking-status`, `/availability`, `/my-slot`, `PUT /sensor/slots/{slot_id}` |
+| Guard | `Authorization: Bearer <token>` from `POST /guard/login`, **or** a valid `X-Gateway-Key` | `POST /gate-entry`, `POST /gate-exit`, `GET /logs`, `GET /bookings`, `GET /alerts`, `POST /alerts/{id}/resolve` |
+| Gateway | `X-Gateway-Key: <PARKING_GATEWAY_KEY>` | `POST /gateway/slot-map`, `POST /sensor-events`, `POST /gateway/heartbeat` |
 
-Paths are relative to the base URL. For example:
-`GET http://127.0.0.1:5000/parking-slots`.
-
-## Health check
-
-### `GET /health`
-
-Successful response (`200 OK`):
-
-```json
-{
-  "status": "ok"
-}
-```
-
-## List parking slots
-
-### `GET /parking-slots`
-
-Returns every row in the parking-slots table, including occupied and
-unavailable spaces. The result is an array and may be empty.
-
-Example (`200 OK`):
-
-```json
-[
-  {
-    "id": "slot-001",
-    "name": "SLOT-001",
-    "digitalstatus": 0,
-    "physicalstatus": 0,
-    "floor": "B1"
-  },
-  {
-    "id": "slot-002",
-    "name": "SLOT-002",
-    "digitalstatus": 1,
-    "physicalstatus": 0,
-    "floor": "B1"
-  }
-]
-```
-
-`digitalstatus` and `physicalstatus` are SQLite boolean values and are
-typically serialized as `0` (false) or `1` (true). A slot is eligible for
-booking only when both values are `0`.
-
-## Guard login
-
-### `POST /guard/login`
-
-Send a JSON request with `Content-Type: application/json`.
-
-```json
-{
-  "username": "user1234",
-  "password": "pass1234"
-}
-```
-
-Successful response (`200 OK`):
-
-```json
-{
-  "token": "b1Xc0...random-url-safe-string"
-}
-```
-
-Send the token on guarded requests as `Authorization: Bearer <token>`. Tokens
-are random and kept in server memory, so they are invalid after a server
-restart. Logging in again returns a new token; earlier tokens stay valid until
-restart. The credentials are fixed server constants.
-
-Errors: `401 Unauthorized` with `{"detail":"Wrong username or password."}`.
-
-## Sensor
-
-### `PUT /sensor/slots/{slot_id}`
-
-Public endpoint for a hardware sensor. It needs no token. Send:
-
-```json
-{
-  "occupied": true
-}
-```
-
-`occupied: true` sets `physicalstatus` to `1`; `false` sets it to `0`. The
-response is the updated slot, in the same shape as an item from
-`GET /parking-slots`:
-
-```json
-{
-  "id": "slot-001",
-  "name": "SLOT-001",
-  "digitalstatus": 0,
-  "physicalstatus": 1,
-  "floor": "B1"
-}
-```
-
-Errors: `404 Not Found` with `{"detail":"Slot not found."}` when no slot has
-that `slot_id`.
-
-## Gate entry and slot booking
-
-### `POST /gate-entry`
-
-Requires `Authorization: Bearer <token>` from `POST /guard/login`. Without a
-valid token the response is `401 Unauthorized`:
+A guard endpoint called without a valid token or gateway key returns
+`401 Unauthorized`:
 
 ```json
 {"detail":"Guard login required."}
 ```
 
-Send a JSON request with `Content-Type: application/json`.
+Accepting the gateway key on guard endpoints lets hardware, such as the
+plate-reader simulator, call gate entry and exit without a guard login.
+Gateway endpoints return `401 {"detail":"Invalid gateway key."}` for a bad or
+missing key and `503` when `PARKING_GATEWAY_KEY` is not set on the server.
 
-| Field | Type | Required | Default | Notes |
-| --- | --- | --- | --- | --- |
-| `number_plate` | string | Yes | — | This is compulsary. |
-| `phone_number` | string | No | `"NA"` | Use `"NA"` when no phone number is supplied. |
-| `username` | string | No | `"NA"` | Used when creating a new user; existing user data is returned unchanged. |
+## Endpoint list
 
-At least one usable identifier is required. An empty value, whitespace-only
-value, or `"NA"` (case-sensitive) is treated as missing during lookup. Keep
-the required `number_plate` field in the request even for phone-only lookup:
+| Method | Path | Access | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/` | Public | Basic greeting. |
+| `GET` | `/health` | Public | Check the API is responding. |
+| `GET` | `/parking-slots` | Public | All slots, with the holder's plate when assigned. |
+| `GET` | `/parking-status?number_plate=` | Public | Active parking, minutes parked and cost for a plate. |
+| `GET` | `/availability` | Public | Free and total slots per floor. |
+| `GET` | `/my-slot?plate=` | Public | Where did I park (rate limited). |
+| `PUT` | `/sensor/slots/{slot_id}` | Public | Set a slot's physical occupancy (simulator/hardware shortcut). |
+| `POST` | `/guard/login` | Public | Exchange guard credentials for a bearer token. |
+| `POST` | `/gate-entry` | Guard | Find or create a user and book a slot. |
+| `POST` | `/gate-exit` | Guard | Close the user's open booking and free the slot. |
+| `GET` | `/logs` | Guard | Entry/exit history. |
+| `GET` | `/bookings` | Guard | Bookings with driver and slot attached. |
+| `GET` | `/alerts` | Guard | Open or resolved alerts. |
+| `POST` | `/alerts/{alert_id}/resolve` | Guard | Resolve an open alert. |
+| `POST` | `/gateway/slot-map` | Gateway | Map slots to sensor node and channel. |
+| `POST` | `/sensor-events` | Gateway | Push slot occupancy readings. |
+| `POST` | `/gateway/heartbeat` | Gateway | Report which sensor nodes are online. |
 
-```json
-{
-  "number_plate": "NA",
-  "phone_number": "5551000"
-}
-```
+## Health
 
-Trim plate and phone values in the frontend before sending them. The server
-trims values for lookup, but if it creates a new user it stores the submitted
-values as-is. Send the missing-value marker exactly as `"NA"`.
+`GET /health` returns `{"status": "ok"}`.
 
-The server matches an existing user by both identifiers if possible. If only
-one of the provided identifiers matches, it uses that user. If the plate and
-phone match different users, the server prioritizes the plate-matched user and
-includes a warning. If neither matches, it creates a user and then attempts to
-book a slot.
+## Parking slots
 
-A slot is bookable when `digitalstatus` and `physicalstatus` are both `0`.
-On success the server changes `digitalstatus` to `1` and writes an open row
-(`endtime` NULL) to the `logs` table. A user who already has an open log row
-cannot book again until it is closed. If no slot can be booked,
-the request fails and a newly created user is rolled back with the booking.
+### `GET /parking-slots`
 
-### Successful response
-
-Response (`200 OK`):
+Every slot, including occupied and unavailable ones. The array may be empty.
 
 ```json
-{
-  "userdata": {
-    "id": "user-id",
-    "name": "Alex",
-    "numberplate": "ABC123",
-    "phonenumber": "5551000"
+[
+  {
+    "id": "slot-001", "name": "SLOT-001", "digitalstatus": 0,
+    "physicalstatus": 0, "floor": "B1", "sensor_state": "ok",
+    "numberplate": null, "booking_status": null
   },
-  "parking_slot": {
-    "id": "slot-001",
-    "name": "SLOT-001",
-    "digitalstatus": 1,
-    "physicalstatus": 0,
-    "floor": "B1"
-  },
-  "warning": null
-}
+  {
+    "id": "slot-002", "name": "SLOT-002", "digitalstatus": 1,
+    "physicalstatus": 0, "floor": "B1", "sensor_state": "ok",
+    "numberplate": "ABC123", "booking_status": "assigned"
+  }
+]
 ```
 
-When the plate and phone identify different existing users, `warning` contains
-this message and `userdata` belongs to the plate-matched user:
+- `digitalstatus` / `physicalstatus` are `0` or `1`. A slot is bookable only
+  when both are `0` and its sensor state is `ok`.
+- `sensor_state` is `ok`, `unknown` (node offline) or `fault`.
+- `numberplate` and `booking_status` (`assigned` or `parked`) come from the
+  active booking when `digitalstatus` is `1`; both are `null` otherwise.
+
+### `GET /availability`
+
+Free and total slots per floor. Slots with a non-`ok` sensor do not count as
+free.
 
 ```json
-"warning": "Conflict: Number plate and phone number belong to different users. Prioritized number plate."
+[{"floor": "B1", "total": 5, "free": 3}]
 ```
 
-The conflict is a successful gate-entry response (`200 OK`), not an HTTP
-`409 Conflict`.
-
-### Example request
-
-```http
-POST /gate-entry
-Content-Type: application/json
-```
-
-```json
-{
-  "number_plate": "ABC123",
-  "phone_number": "5551000",
-  "username": "Alex"
-}
-```
-
-### Errors
-
-| HTTP status | Meaning | Example response |
-| --- | --- | --- |
-| `400 Bad Request` | Both identifiers are absent or treated as `"NA"`. | `{"detail":"Please provide either number plate or phone number."}` |
-| `401 Unauthorized` | Missing, unknown, or malformed guard token. | `{"detail":"Guard login required."}` |
-| `409 Conflict` | The user already has an active booking. | `{"detail":"User already has an active parking booking."}` |
-| `404 Not Found` | No available parking slot could be booked. | `{"detail":"No available parking slots."}` |
-| `422 Unprocessable Entity` | Invalid JSON, missing required `number_plate`, or a field has the wrong type. | FastAPI validation response with a `detail` array. |
-| `500 Internal Server Error` | An unexpected server or database error occurred. | Error response; do not assume the request succeeded. |
-
-The frontend should check `response.ok` before treating a request as
-successful, and should show the `detail` value (or validation details) for
-errors.
-
-## Parking status
+## Parking status and driver lookup
 
 ### `GET /parking-status?number_plate=ABC123`
 
-Returns the open booking for a number plate (case-insensitive). Cost is
+Public. Finds the open log row for a number plate (case-insensitive). Cost is
 Rs 20 fixed plus Rs 3 for every started 10-minute block.
 
 ```json
 {
   "slot_name": "SLOT-001",
   "floor": "B1",
+  "numberplate": "ABC123",
   "starttime": "2026-10-09T10:00:00+00:00",
   "minutes_parked": 25,
   "cost": 29
 }
 ```
 
-Errors: `400` for a blank plate, `404` when the plate has no open booking.
+Errors: `400` for a blank or `NA` plate, `404` when the plate has no open entry.
 
-## Browser integration and CORS
+### `GET /my-slot?plate=ABC123`
 
-The server enables FastAPI `CORSMiddleware`. Allowed origins come from the
-`CORS_ORIGINS` environment variable, a comma-separated list such as:
+Public, limited to 10 lookups per minute per client (`429` after that).
 
-```text
-CORS_ORIGINS=http://localhost:3000,https://parking.example.com
+```json
+{
+  "parking_slot": {"id": "slot-001", "name": "SLOT-001", "digitalstatus": 1, "physicalstatus": 0, "floor": "B1"},
+  "booking_status": "assigned",
+  "expires_at": "2026-10-09T10:15:00+00:00",
+  "directions": "Go to floor B1 and look for SLOT-001."
+}
 ```
 
-If `CORS_ORIGINS` is unset, it defaults to `*` (any origin). All methods and
-headers are allowed. Credentials are not allowed, so the frontend sends the
-guard token in the `Authorization` header rather than in cookies. Set
-`CORS_ORIGINS` to the frontend's exact origins in any shared or production
-deployment. The variable is read when the server starts, so restart the server
-after changing it.
+`expires_at` is only set while the booking is `assigned`. Error: `404` when the
+plate has no active booking.
 
-Example frontend request:
+## Guard login
+
+### `POST /guard/login`
+
+```json
+{"username": "user1234", "password": "pass1234"}
+```
+
+Response (`200 OK`): `{"token": "<random url-safe string>"}`. Send it as
+`Authorization: Bearer <token>`. Tokens are kept in server memory, so they are
+invalid after a restart; earlier tokens stay valid until then. The credentials
+are fixed server constants (`GUARD_USERNAME`, `GUARD_PASSWORD`).
+
+Error: `401` with `{"detail":"Wrong username or password."}`.
+
+## Gate entry
+
+### `POST /gate-entry` (guard)
+
+| Field | Type | Required | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `number_plate` | string | Yes | none | Send `"NA"` for phone-only lookup. |
+| `phone_number` | string | No | `"NA"` | |
+| `username` | string | No | `"NA"` | Used only when a new user is created. |
+
+An empty, whitespace-only or `"NA"` (case-sensitive) value counts as missing;
+at least one usable identifier is required. The server matches an existing user
+by both identifiers, falls back to whichever one matches, and creates a user if
+neither does. If plate and phone belong to different users, the plate-matched
+user is used and `warning` explains it (still `200 OK`).
+
+In one transaction the server books the first free slot (ordered by floor,
+name, id), writes an open `logs` row, and creates a walk-in booking with status
+`assigned` that expires after 15 minutes unless the sensor sees the car park.
+A user with an open booking cannot enter again. If no slot can be booked the
+request fails and a newly created user is rolled back.
+
+Response (`200 OK`):
+
+```json
+{
+  "userdata": {"id": "user-id", "name": "Alex", "numberplate": "ABC123", "phonenumber": "5551000"},
+  "parking_slot": {"id": "slot-001", "name": "SLOT-001", "digitalstatus": 1, "physicalstatus": 0, "floor": "B1"},
+  "warning": null
+}
+```
+
+| Status | Meaning |
+| --- | --- |
+| `400` | No usable plate or phone: `Please provide either number plate or phone number.` |
+| `401` | `Guard login required.` |
+| `404` | `No available parking slots.` |
+| `409` | `User already has an active parking booking.` |
+| `422` | Invalid JSON or wrong field types. |
+
+## Gate exit
+
+### `POST /gate-exit` (guard)
+
+Body: `number_plate` (required string) and `phone_number` (default `"NA"`),
+resolved like gate entry. Sets `endtime` on the open log row, resets the slot's
+`digitalstatus` to 0 and marks the booking `completed`.
+
+```json
+{
+  "userdata": {"id": "user-id", "name": "Alex", "numberplate": "ABC123", "phonenumber": "5551000"},
+  "parking_slot": {"id": "slot-001", "name": "SLOT-001", "digitalstatus": 0, "physicalstatus": 0, "floor": "B1"},
+  "log": {"id": "log-id", "slotid": "slot-001", "starttime": "...", "endtime": "...", "userid": "user-id"},
+  "warning": null
+}
+```
+
+Errors: `400` no usable identifier; `401` guard login required; `404` with
+`User not found.` or `User has no active parking booking.`.
+
+## Logs, bookings and alerts (guard)
+
+### `GET /logs?user_id=&active=&limit=100`
+
+Log rows newest first, each with the user's `numberplate` added.
+`active=true` lists open entries, `active=false` closed ones. `limit` is
+clamped to 1..1000.
+
+```json
+[{"id": "log-id", "slotid": "slot-001", "starttime": "...", "endtime": null, "userid": "user-id", "numberplate": "ABC123"}]
+```
+
+### `GET /bookings?active=&limit=100`
+
+Newest first. `active=true` lists `assigned` and `parked` bookings,
+`active=false` the finished ones (`completed`, `noshow`, `cancelled`).
+
+```json
+[{
+  "id": "booking-id", "kind": "walkin", "status": "assigned",
+  "start_time": "...", "expires_at": "...",
+  "userid": "user-id", "username": "Alex", "numberplate": "ABC123", "phonenumber": "5551000",
+  "slotid": "slot-001", "slotname": "SLOT-001", "floor": "B1"
+}]
+```
+
+### `GET /alerts?open=true`
+
+Alerts newest first (`open=false` lists resolved ones). Each has `id`,
+`slotid`, `type` (`unbooked_car`, `node_offline`), `detail`, `created_at`,
+`resolved_at`.
+
+### `POST /alerts/{alert_id}/resolve`
+
+Returns `{"resolved": "<id>"}`; `404` when there is no open alert with that id.
+
+## Sensors and gateway
+
+### `PUT /sensor/slots/{slot_id}` (public)
+
+Body `{"occupied": true}`. Applies the same reconciliation as a sensor event
+(an `assigned` booking becomes `parked`; a car in an unbooked slot opens an
+alert) and returns the updated slot row. `404 {"detail":"Slot not found."}`
+for an unknown slot.
+
+### `POST /gateway/slot-map` (gateway)
+
+Body: list of `{"slot_id", "node", "channel"}`. Returns `{"mapped": n}`.
+`404` for an unknown slot; `409` when a node/channel is already mapped to
+another slot.
+
+### `POST /sensor-events` (gateway)
+
+Body: list of `{"slot_id"?, "node"?, "channel"?, "occupied"}`. A reading is
+addressed by `slot_id` or by `node` + `channel`. Returns
+`{"applied": [{"index", "slot_id", "outcome"}], "rejected": [{"index", "reason"}]}`.
+`outcome` is `parked`, `unbooked`, `occupied` or `vacated`.
+
+### `POST /gateway/heartbeat` (gateway)
+
+Body: `{"nodes": [{"node": 1, "online": true}]}`. An offline node marks its
+slots `unknown` (not assignable) and opens a `node_offline` alert; coming back
+online restores them. Returns `{"nodes": n}`.
+
+## Booking lifecycle
+
+`assigned` (slot held, 15 minutes) -> `parked` (sensor saw the car) ->
+`completed` (gate exit). An `assigned` booking that is not parked in time
+becomes `noshow` and the slot is released (checked every 30 seconds, see
+`PARKING_EXPIRY_INTERVAL`).
+
+## CORS and browser integration
+
+Allowed origins come from `CORS_ORIGINS` (comma-separated), falling back to
+`PARKING_CORS_ORIGINS`, and default to `*`. Allowed methods are `GET`, `POST`,
+`PUT`, `OPTIONS`; allowed headers are `Content-Type`, `Authorization` and
+`X-Gateway-Key`. Credentials are not allowed, so the guard token travels in the
+`Authorization` header, not in cookies. Set `CORS_ORIGINS` to the exact
+frontend origins for a shared deployment; it is read at startup.
 
 ```javascript
 const response = await fetch(`${API_BASE_URL}/gate-entry`, {
   method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${guardToken}`,
-  },
-  body: JSON.stringify({
-    number_plate: "ABC123",
-    phone_number: "5551000",
-    username: "Alex",
-  }),
+  headers: { "Content-Type": "application/json", Authorization: `Bearer ${guardToken}` },
+  body: JSON.stringify({ number_plate: "ABC123", phone_number: "5551000", username: "Alex" }),
 });
-
 const result = await response.json();
-
-if (!response.ok) {
-  throw new Error(
-    typeof result.detail === "string"
-      ? result.detail
-      : "The request failed validation. Check the submitted fields."
-  );
-}
-
-if (result.warning) {
-  console.warn(result.warning);
-}
-
-console.log("Assigned slot:", result.parking_slot);
+if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "Validation failed.");
 ```
 
-## Not currently implemented
+## Environment variables
 
-The API currently has no endpoint to release a slot, register an exit, view a
-user's booking history, or read log records (logs are written on entry only). Do not assume a successful
-gate-entry response provides those capabilities.
+| Variable | Purpose |
+| --- | --- |
+| `PARKING_GATEWAY_KEY` | Secret for `X-Gateway-Key`. Gateway endpoints return 503 without it. |
+| `CORS_ORIGINS` / `PARKING_CORS_ORIGINS` | Allowed browser origins (default `*`). |
+| `PARKING_EXPIRY_INTERVAL` | Seconds between no-show sweeps (default 30). |

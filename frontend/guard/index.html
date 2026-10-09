@@ -4,74 +4,84 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Guard</title>
-  <link rel="stylesheet" href="../shared/style.css">
-  <style>
-    [hidden] { display: none !important; }
-    h2 { margin: 0; font-size: 1.15rem; }
-    .row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; }
-    .field { margin-bottom: 1rem; }
-    .hint { margin: .5rem 0 0; font-size: .92rem; color: var(--muted); }
-    .actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1.25rem; }
-    .status { min-height: 1.5rem; margin: 1rem 0 0; color: var(--muted); }
-    .status[data-state="error"] { color: var(--error); font-weight: 600; }
-    .warning { margin: 1rem 0 0; padding: .8rem; border: 1px solid #a9682c; border-radius: 6px; color: #603b19; background: #fff4df; }
-    .details { display: grid; grid-template-columns: minmax(6.5rem, .8fr) minmax(0, 1.2fr); gap: .6rem 1rem; margin: 1rem 0 0; overflow-wrap: anywhere; }
-    .details dt { color: var(--muted); }
-    .details dd { margin: 0; font-weight: 600; }
-  </style>
+  <title>Guard Console</title>
+  <link rel="stylesheet" href="guard.css">
 </head>
 <body>
-  <main>
-    <h1>Guard</h1>
+  <section id="login-view" class="login" hidden>
+    <form class="panel" id="login-form" autocomplete="off">
+      <h1>Guard Console</h1>
+      <p>Log in to manage the gate and the lot.</p>
+      <label for="login-user">Username</label>
+      <input id="login-user" name="username" required autocomplete="username" autocapitalize="none" spellcheck="false">
+      <label for="login-pass">Password</label>
+      <input id="login-pass" name="password" type="password" required autocomplete="current-password">
+      <button class="btn btn-primary" type="submit">Log in</button>
+      <div id="login-error" class="login-error" role="alert"></div>
+    </form>
+  </section>
 
-    <section id="login-view" class="panel" aria-labelledby="login-title">
-      <h2 id="login-title">Sign in</h2>
-      <form id="login-form" novalidate>
-        <div class="field">
-          <label for="username">Username</label>
-          <input id="username" name="username" autocomplete="username">
-        </div>
-        <div class="field">
-          <label for="password">Password</label>
-          <input id="password" name="password" type="password" autocomplete="current-password">
-        </div>
-        <div class="actions">
-          <button id="login-submit" type="submit">Sign in</button>
-        </div>
+  <div id="app-view" hidden>
+  <header class="topbar">
+    <h1>Guard Console</h1>
+    <div class="topbar-right">
+      <span id="conn" class="conn" data-state="connecting" role="status">Connecting...</span>
+      <button id="logout-btn" class="btn btn-quiet" type="button">Log out</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel gate" aria-labelledby="gate-title">
+      <h2 id="gate-title">Gate</h2>
+
+      <div class="tabs" role="tablist" aria-label="Gate action">
+        <button class="tab" role="tab" id="tab-entry" aria-selected="true" aria-controls="form-entry" type="button">Entry</button>
+        <button class="tab" role="tab" id="tab-exit" aria-selected="false" aria-controls="form-exit" type="button" tabindex="-1">Exit</button>
+      </div>
+
+      <form id="form-entry" role="tabpanel" aria-labelledby="tab-entry" autocomplete="off">
+        <label for="entry-plate">Number plate <span class="req">required</span></label>
+        <input id="entry-plate" name="plate" required autocapitalize="characters" spellcheck="false" placeholder="TS09AB1234">
+        <label for="entry-name">Driver name <span class="opt">optional</span></label>
+        <input id="entry-name" name="name" placeholder="Alex">
+        <label for="entry-phone">Phone <span class="opt">optional</span></label>
+        <input id="entry-phone" name="phone" inputmode="tel" placeholder="9876543210">
+        <button class="btn btn-primary" type="submit">Assign slot</button>
       </form>
-      <p id="login-message" class="message" role="alert" hidden></p>
+
+      <form id="form-exit" role="tabpanel" aria-labelledby="tab-exit" autocomplete="off" hidden>
+        <label for="exit-plate">Number plate <span class="req">required</span></label>
+        <input id="exit-plate" name="plate" required autocapitalize="characters" spellcheck="false" placeholder="TS09AB1234">
+        <label for="exit-phone">Phone <span class="opt">optional</span></label>
+        <input id="exit-phone" name="phone" inputmode="tel" placeholder="Only if the plate is unknown">
+        <button class="btn btn-primary" type="submit">Check out</button>
+      </form>
+
+      <div id="gate-result" class="result" aria-live="polite"></div>
     </section>
 
-    <section id="gate-view" class="panel" aria-labelledby="gate-title" hidden>
-      <div class="row">
-        <h2 id="gate-title">Gate entry</h2>
-        <button id="logout" type="button" class="secondary">Log out</button>
+    <section class="panel lot" aria-labelledby="lot-title">
+      <div class="panel-head">
+        <h2 id="lot-title">Lot</h2>
+        <ul id="legend" class="legend" aria-label="Legend"></ul>
       </div>
-      <form id="gate-form" novalidate>
-        <div class="field">
-          <label for="number-plate">Vehicle number plate</label>
-          <input id="number-plate" name="number_plate" autocomplete="off" placeholder="For example, ABC123">
-        </div>
-        <div class="field">
-          <label for="phone-number">Phone number</label>
-          <input id="phone-number" name="phone_number" type="tel" autocomplete="off" placeholder="For example, 5551000">
-        </div>
-        <div class="field">
-          <label for="visitor-name">Name <span class="hint">(optional)</span></label>
-          <input id="visitor-name" name="username" autocomplete="off">
-        </div>
-        <p class="hint">Enter a plate, a phone number, or both. Blank values are sent as NA.</p>
-        <div class="actions">
-          <button id="entry-submit" type="submit">Submit gate entry</button>
-          <button type="reset" class="secondary">Clear form</button>
-        </div>
-      </form>
-      <p id="gate-status" class="status" role="status" data-state="idle"></p>
-      <p id="gate-warning" class="warning" role="alert" hidden></p>
-      <dl id="gate-result" class="details" hidden></dl>
+      <div id="availability" class="availability"></div>
+      <div id="slots"></div>
+    </section>
+
+    <section class="panel lists" aria-labelledby="lists-title">
+      <h2 id="lists-title" class="sr-only">Cars and alerts</h2>
+      <div class="tabs" role="tablist" aria-label="Lists">
+        <button class="tab" role="tab" id="tab-active" aria-selected="true" aria-controls="list-active" type="button">Cars in lot <span id="count-active" class="count">0</span></button>
+        <button class="tab" role="tab" id="tab-alerts" aria-selected="false" aria-controls="list-alerts" type="button" tabindex="-1">Alerts <span id="count-alerts" class="count">0</span></button>
+        <button class="tab" role="tab" id="tab-history" aria-selected="false" aria-controls="list-history" type="button" tabindex="-1">History</button>
+      </div>
+      <div id="list-active" role="tabpanel" aria-labelledby="tab-active"></div>
+      <div id="list-alerts" role="tabpanel" aria-labelledby="tab-alerts" hidden></div>
+      <div id="list-history" role="tabpanel" aria-labelledby="tab-history" hidden></div>
     </section>
   </main>
+  </div>
 
   <script src="../config.js"></script>
   <script src="../shared/api.js"></script>

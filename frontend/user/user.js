@@ -3,7 +3,18 @@ const input = document.getElementById("number-plate");
 const submit = document.getElementById("submit");
 const message = document.getElementById("message");
 const result = document.getElementById("result");
+const clearButton = document.getElementById("clear");
+const STORAGE_KEY = "parking.numberPlate";
 let refreshTimer = null;
+
+function savedPlate() {
+  try { return (localStorage.getItem(STORAGE_KEY) || "").trim(); } catch { return ""; }
+}
+
+function savePlate(plate) {
+  try { localStorage.setItem(STORAGE_KEY, plate); } catch {}
+  clearButton.hidden = false;
+}
 
 function formatDuration(minutes) {
   const hours = Math.floor(minutes / 60);
@@ -17,6 +28,9 @@ async function lookup(plate) {
   document.getElementById("floor").textContent = payload.floor;
   document.getElementById("duration").textContent = formatDuration(payload.minutes_parked);
   document.getElementById("cost").textContent = `Rs ${payload.cost}`;
+  const plateEl = document.getElementById("result-plate");
+  plateEl.textContent = payload.numberplate || "";
+  plateEl.hidden = !payload.numberplate;
   result.hidden = false;
 }
 
@@ -29,11 +43,10 @@ function showError(error) {
   message.hidden = false;
 }
 
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
+async function run(plate) {
   clearInterval(refreshTimer);
   message.hidden = true;
-  const plate = input.value.trim();
+  savePlate(plate);
   submit.disabled = true;
   submit.textContent = "Searching...";
   try {
@@ -45,4 +58,26 @@ form.addEventListener("submit", async (event) => {
     submit.disabled = false;
     submit.textContent = "Find my slot";
   }
+}
+
+form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  run(input.value.trim());
 });
+
+clearButton.addEventListener("click", () => {
+  clearInterval(refreshTimer);
+  try { localStorage.removeItem(STORAGE_KEY); } catch {}
+  input.value = "";
+  message.hidden = true;
+  result.hidden = true;
+  clearButton.hidden = true;
+  input.focus();
+});
+
+const remembered = savedPlate();
+if (remembered) {
+  input.value = remembered;
+  clearButton.hidden = false;
+  run(remembered);
+}

@@ -30,3 +30,7 @@ All links are relative, so the site works from a domain root or a sub-path.
 **Netlify:** import the repository and set Base directory to `frontend`. Leave the build command empty and the publish directory as `.`. `netlify.toml` is included.
 
 **GitHub Pages:** the workflow is at `.github/workflows/pages.yml` in the repository root. In the repository settings under Pages, set Source to "GitHub Actions". Pushes to `main` deploy the `frontend/` folder. `.nojekyll` is included so files are served as-is.
+
+## Sensor simulator (`sensor/`)
+
+Browser stand-in for the hardware. Shows every parking slot in the guard's slot-map colors, grouped five per node; click a slot to toggle its IR sensor (sent to `/sensor-events`). Each node has an online/offline switch (`/gateway/heartbeat`), and "Register nodes" posts the slot-to-node mapping to `/gateway/slot-map`. The Number plate readers panel has an Entry camera (`/gate-entry`) and an Exit camera (`/gate-exit`). Open **Gateway key** and enter the backend's `PARKING_GATEWAY_KEY`; it is kept in localStorage and sent as `X-Gateway-Key`.

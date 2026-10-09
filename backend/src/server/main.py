@@ -3,14 +3,15 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager, closing
 from datetime import datetime, timezone
 import hmac
+from math import ceil
 import os
 from pathlib import Path
+import secrets
 import sqlite3
 import time
 import uuid
-from fastapi import FastAPI, Header, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from server import bookings
@@ -51,23 +52,33 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# Browser origins allowed to call the API. Override with a comma-separated
-# PARKING_CORS_ORIGINS; the defaults are common local frontend dev servers.
-DEFAULT_CORS_ORIGINS = (
-    "http://localhost:3000,http://127.0.0.1:3000,"
-    "http://localhost:5173,http://127.0.0.1:5173"
-)
+# Browser origins allowed to call the API: comma-separated CORS_ORIGINS (or the
+# older PARKING_CORS_ORIGINS). Defaults to "*" because the API uses bearer
+# tokens, not cookies.
 CORS_ORIGINS = [
     origin.strip()
-    for origin in os.environ.get("PARKING_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
+    for origin in (
+        os.environ.get("CORS_ORIGINS") or os.environ.get("PARKING_CORS_ORIGINS") or "*"
+    ).split(",")
     if origin.strip()
 ]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "X-Gateway-Key"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Gateway-Key"],
 )
+
+# Fixed demo guard account; tokens live in memory and reset on restart.
+GUARD_USERNAME = "user1234"
+GUARD_PASSWORD = "pass1234"
+guard_tokens: set[str] = set()
+
+# Parking charge: fixed fee plus a rate per started block of minutes.
+FIXED_FEE = 20
+RATE_PER_BLOCK = 3
+BLOCK_MINUTES = 10
 
 DB_PATH = Path(__file__).resolve().parents[2] / "parking.db"
 
@@ -138,227 +149,129 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.get("/dashboard/gate-entry", response_class=HTMLResponse)
-def gate_entry_dashboard():
-    return """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <title>Gate entry test</title>
-  <style>
-    :root {
-      color-scheme: light;
-      font: 16px/1.5 system-ui, sans-serif;
-      color: #20342d;
-      background: #f3f1e9;
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; }
-    main { width: min(100% - 2rem, 960px); margin: 0 auto; padding: 3rem 0; }
-    header { margin-bottom: 2rem; }
-    h1 { margin: 0; font-size: clamp(2rem, 5vw, 3rem); line-height: 1.1; }
-    h2 { margin: 0 0 1rem; font-size: 1.15rem; }
-    p { margin: .65rem 0 0; }
-    .intro { max-width: 62ch; color: #43574f; }
-    .draft-note { margin-top: 1rem; font-size: .9rem; color: #43574f; }
-    .workspace { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 1rem; align-items: start; }
-    .panel { min-width: 0; padding: clamp(1.1rem, 3vw, 1.6rem); border: 1px solid #c9cec4; border-radius: 12px; background: #fffefa; }
-    .field { margin: 0 0 1.1rem; }
-    label { display: block; margin-bottom: .35rem; font-weight: 650; }
-    input {
-      width: 100%;
-      min-height: 46px;
-      padding: .65rem .75rem;
-      border: 1px solid #87968e;
-      border-radius: 6px;
-      color: #20342d;
-      background: #fff;
-      font: inherit;
-    }
-    input:focus-visible, button:focus-visible, a:focus-visible {
-      outline: 3px solid #9b5a22;
-      outline-offset: 3px;
-    }
-    .hint, .quiet { color: #43574f; font-size: .92rem; }
-    .actions { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1.4rem; }
-    button { min-height: 46px; padding: .65rem 1rem; border: 1px solid #1e5541; border-radius: 6px; font: inherit; font-weight: 650; cursor: pointer; }
-    button[type="submit"] { color: #fff; background: #1e5541; }
-    button[type="reset"] { color: #20342d; background: transparent; }
-    button:disabled { cursor: wait; opacity: .72; }
-    .status { min-height: 3rem; margin: 0 0 1rem; color: #43574f; }
-    .status[data-state="error"] { color: #8a2f20; font-weight: 600; }
-    .warning { margin: 1rem 0; padding: .8rem; border: 1px solid #a9682c; border-radius: 6px; color: #603b19; background: #fff4df; }
-    .details { display: grid; grid-template-columns: minmax(7rem, .7fr) minmax(0, 1.3fr); gap: .6rem 1rem; margin: 0; overflow-wrap: anywhere; }
-    .details dt { color: #43574f; }
-    .details dd { margin: 0; font-weight: 600; }
-    a { color: #174a39; }
-    /* One column keeps the request and its response together on narrow screens. */
-    @media (max-width: 680px) {
-      main { padding: 2rem 0; }
-      .workspace { grid-template-columns: 1fr; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { scroll-behavior: auto !important; }
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <header>
-      <h1>Gate entry</h1>
-      <p class="intro">Send a test entry through the gate-entry API and review the assigned user and parking slot here.</p>
-      <p class="draft-note">Draft without direction · ENERGY 1 / RHYTHM 1 / MOTION 1</p>
-    </header>
-    <div class="workspace">
-      <section class="panel" aria-labelledby="form-title">
-        <h2 id="form-title">Entry details</h2>
-        <form id="gate-entry-form">
-          <div class="field">
-            <label for="number-plate">Vehicle number plate</label>
-            <input id="number-plate" name="number_plate" autocomplete="off" placeholder="For example, ABC123">
-          </div>
-          <div class="field">
-            <label for="phone-number">Phone number</label>
-            <input id="phone-number" name="phone_number" type="tel" autocomplete="tel" placeholder="For example, 5551000">
-          </div>
-          <div class="field">
-            <label for="username">Name <span class="quiet">(optional)</span></label>
-            <input id="username" name="username" autocomplete="name" placeholder="Name for a new user">
-          </div>
-          <p class="hint">Enter a plate, a phone number, or both. Blank values are sent as NA.</p>
-          <div class="actions">
-            <button id="submit-entry" type="submit">Submit gate entry</button>
-            <button type="reset">Clear form</button>
-          </div>
-        </form>
-      </section>
-      <section class="panel" aria-labelledby="result-title" aria-live="polite">
-        <h2 id="result-title">API response</h2>
-        <p id="status" class="status" role="status" data-state="idle">No request yet. Submit the form to test gate entry.</p>
-        <p id="warning" class="warning" role="alert" hidden></p>
-        <dl id="result-details" class="details" hidden></dl>
-      </section>
-    </div>
-    <p class="quiet">The page uses the API on this server. <a href="/docs">Open API documentation</a>.</p>
-  </main>
-  <script>
-    const form = document.getElementById("gate-entry-form");
-    const statusMessage = document.getElementById("status");
-    const submitButton = document.getElementById("submit-entry");
-    const warning = document.getElementById("warning");
-    const resultDetails = document.getElementById("result-details");
-
-    function showStatus(message, state) {
-      statusMessage.textContent = message;
-      statusMessage.dataset.state = state;
-    }
-
-    function showResult(payload) {
-      const rows = [
-        ["Name", payload.userdata.name],
-        ["Number plate", payload.userdata.numberplate],
-        ["Phone number", payload.userdata.phonenumber],
-        ["Assigned slot", payload.parking_slot.name],
-        ["Floor", payload.parking_slot.floor],
-      ];
-      resultDetails.replaceChildren(...rows.flatMap(([label, value]) => {
-        const term = document.createElement("dt");
-        term.textContent = label;
-        const description = document.createElement("dd");
-        description.textContent = value;
-        return [term, description];
-      }));
-      resultDetails.hidden = false;
-      warning.textContent = payload.warning || "";
-      warning.hidden = !payload.warning;
-    }
-
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const values = new FormData(form);
-      const numberPlate = values.get("number_plate").trim();
-      const phoneNumber = values.get("phone_number").trim();
-      const username = values.get("username").trim();
-
-      resultDetails.hidden = true;
-      warning.hidden = true;
-      if (!numberPlate && !phoneNumber) {
-        showStatus("Enter a vehicle plate or phone number to continue.", "error");
-        form.elements.number_plate.focus();
-        return;
-      }
-
-      submitButton.disabled = true;
-      submitButton.textContent = "Submitting...";
-      showStatus("Sending the gate-entry request...", "loading");
-      try {
-        const response = await fetch("/gate-entry", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            number_plate: numberPlate || "NA",
-            phone_number: phoneNumber || "NA",
-            username: username || "NA",
-          }),
-        });
-        const payload = await response.json().catch(() => null);
-        if (!payload) {
-          throw new Error("The server returned an unreadable response.");
-        }
-        if (!response.ok) {
-          const detail = Array.isArray(payload.detail)
-            ? payload.detail.map((item) => item.msg).join(" ")
-            : payload.detail;
-          throw new Error(typeof detail === "string" ? detail : "The gate-entry request failed.");
-        }
-        showResult(payload);
-        showStatus("Gate entry completed.", "success");
-      } catch (error) {
-        showStatus(
-          error instanceof TypeError
-            ? "Could not reach the server. Check that the API is running and try again."
-            : error.message,
-          "error",
-        );
-      } finally {
-        submitButton.disabled = false;
-        submitButton.textContent = "Submit gate entry";
-      }
-    });
-
-    form.addEventListener("reset", () => {
-      window.setTimeout(() => {
-        resultDetails.replaceChildren();
-        resultDetails.hidden = true;
-        warning.textContent = "";
-        warning.hidden = true;
-        showStatus("No request yet. Submit the form to test gate entry.", "idle");
-      }, 0);
-    });
-  </script>
-</body>
-</html>"""
-
-
 @app.get("/parking-slots")
 def parking_slots():
-    conn = get_db()
-    try:
-        cur = conn.cursor()
-        cur.execute(
+    """All slots. Digitally assigned slots carry the holder's plate and booking status."""
+    with closing(get_db()) as conn:
+        rows = conn.execute(
             """
-            SELECT p.*, COALESCE(s.state, 'ok') AS sensor_state
-            FROM parkingslots p LEFT JOIN slot_sensors s ON s.slotid = p.id
+            SELECT p.*, COALESCE(s.state, 'ok') AS sensor_state,
+                   CASE WHEN p.digitalstatus = 1 THEN u.numberplate END AS numberplate,
+                   CASE WHEN p.digitalstatus = 1 THEN b.status END AS booking_status
+            FROM parkingslots p
+            LEFT JOIN slot_sensors s ON s.slotid = p.id
+            LEFT JOIN bookings b ON b.id = (
+                SELECT id FROM bookings
+                WHERE slotid = p.id AND status IN ('assigned', 'parked')
+                ORDER BY created_at DESC LIMIT 1
+            )
+            LEFT JOIN users u ON u.id = b.userid
             """
-        )
-        rows = cur.fetchall()
+        ).fetchall()
         return [dict(row) for row in rows]
-    finally:
-        conn.close()
-        
-        
+
+
+@app.get("/parking-status")
+def parking_status(number_plate: str):
+    """Public: the driver's active parking, elapsed minutes and running cost."""
+    plate = number_plate.strip()
+    if not plate or plate == "NA":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please enter a number plate.",
+        )
+    with closing(get_db()) as conn:
+        row = conn.execute(
+            """
+            SELECT l.starttime, s.name AS slot_name, s.floor, u.numberplate
+            FROM logs l
+            JOIN users u ON u.id = l.userid
+            JOIN parkingslots s ON s.id = l.slotid
+            WHERE u.numberplate = ? COLLATE NOCASE AND l.endtime IS NULL
+            ORDER BY l.starttime DESC
+            LIMIT 1
+            """,
+            (plate,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active parking found for this number plate.",
+        )
+    elapsed = bookings.utcnow() - datetime.fromisoformat(row["starttime"])
+    minutes = max(int(elapsed.total_seconds() // 60), 0)
+    # Every started block is charged in full.
+    cost = FIXED_FEE + RATE_PER_BLOCK * ceil(minutes / BLOCK_MINUTES)
+    return {
+        "slot_name": row["slot_name"],
+        "floor": row["floor"],
+        "numberplate": row["numberplate"],
+        "starttime": row["starttime"],
+        "minutes_parked": minutes,
+        "cost": cost,
+    }
+
+
+class SlotOccupancy(BaseModel):
+    occupied: bool
+
+
+@app.put("/sensor/slots/{slot_id}")
+def update_slot_sensor(slot_id: str, data: SlotOccupancy):
+    """Public simulator/hardware shortcut: set one slot's physical occupancy.
+
+    Goes through the same booking reconciliation as /sensor-events.
+    """
+    with closing(get_db()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if bookings.resolve_slot_id(conn, slot_id, None, None) is None:
+            conn.rollback()
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Slot not found.")
+        outcome = bookings.apply_sensor_event(conn, slot_id, data.occupied)
+        if outcome == "unbooked":
+            logger.warning("Alert: car in slot %s with no booking", slot_id)
+        row = conn.execute("SELECT * FROM parkingslots WHERE id = ?", (slot_id,)).fetchone()
+        return dict(row)
+
+
+#! Guard auth
+
+class GuardLogin(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/guard/login")
+def guard_login(data: GuardLogin):
+    username_ok = secrets.compare_digest(data.username.encode(), GUARD_USERNAME.encode())
+    password_ok = secrets.compare_digest(data.password.encode(), GUARD_PASSWORD.encode())
+    if not (username_ok and password_ok):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Wrong username or password.",
+        )
+    token = secrets.token_urlsafe(32)
+    guard_tokens.add(token)
+    return {"token": token}
+
+
+def require_guard(
+    authorization: str | None = Header(default=None),
+    x_gateway_key: str | None = Header(default=None),
+):
+    """Guard bearer token, or the gateway key (hardware, plate reader)."""
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme == "Bearer" and token in guard_tokens:
+        return
+    expected = os.environ.get("PARKING_GATEWAY_KEY")
+    if expected and x_gateway_key is not None and hmac.compare_digest(x_gateway_key, expected):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Guard login required.",
+    )
+
+
 #! Use for All - Functions
 def CheckUser(number_plate: str | None = None, phone_number: str | None = None):
     number_plate = number_plate.strip() if number_plate else None
@@ -469,7 +382,7 @@ class GateEntry(BaseModel):
     phone_number: str = "NA"
     username: str = "NA"
 
-@app.post("/gate-entry")
+@app.post("/gate-entry", dependencies=[Depends(require_guard)])
 def gate_entry(data: GateEntry):
     status_code, user_data = CheckUser(data.number_plate, data.phone_number)
     warning = None
@@ -562,7 +475,7 @@ class GateExit(BaseModel):
     number_plate: str
     phone_number: str = "NA"
 
-@app.post("/gate-exit")
+@app.post("/gate-exit", dependencies=[Depends(require_guard)])
 def gate_exit(data: GateExit):
     status_code, user_data = CheckUser(data.number_plate, data.phone_number)
     warning = None
@@ -633,19 +546,19 @@ def gate_exit(data: GateExit):
 
 #! Log history
 
-@app.get("/logs")
+@app.get("/logs", dependencies=[Depends(require_guard)])
 def list_logs(user_id: str | None = None, active: bool | None = None, limit: int = 100):
     """Entry/exit history, newest first. `active=true` lists open entries only."""
-    query = "SELECT * FROM logs"
+    query = "SELECT l.*, u.numberplate FROM logs l LEFT JOIN users u ON u.id = l.userid"
     clauses, params = [], []
     if user_id is not None:
-        clauses.append("userid = ?")
+        clauses.append("l.userid = ?")
         params.append(user_id)
     if active is not None:
-        clauses.append("endtime IS NULL" if active else "endtime IS NOT NULL")
+        clauses.append("l.endtime IS NULL" if active else "l.endtime IS NOT NULL")
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
-    query += " ORDER BY starttime DESC LIMIT ?"
+    query += " ORDER BY l.starttime DESC LIMIT ?"
     params.append(max(1, min(limit, 1000)))
 
     with closing(get_db()) as conn:
@@ -812,9 +725,9 @@ def availability():
     return [dict(row) for row in rows]
 
 
-#! Guard alerts (no guard auth yet; planned with the guard login)
+#! Guard alerts
 
-@app.get("/alerts")
+@app.get("/alerts", dependencies=[Depends(require_guard)])
 def list_alerts(open: bool = True):
     """Guard alerts, newest first. `open=false` lists resolved ones."""
     clause = "resolved_at IS NULL" if open else "resolved_at IS NOT NULL"
@@ -823,7 +736,7 @@ def list_alerts(open: bool = True):
     return [dict(row) for row in rows]
 
 
-@app.post("/alerts/{alert_id}/resolve")
+@app.post("/alerts/{alert_id}/resolve", dependencies=[Depends(require_guard)])
 def resolve_alert(alert_id: str):
     with closing(get_db()) as conn, conn:
         cur = conn.execute(
@@ -837,7 +750,7 @@ def resolve_alert(alert_id: str):
 
 #! Booking list (guard view)
 
-@app.get("/bookings")
+@app.get("/bookings", dependencies=[Depends(require_guard)])
 def list_bookings(active: bool | None = None, limit: int = 100):
     """Bookings with the driver and slot attached, newest first.
 

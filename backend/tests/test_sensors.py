@@ -36,6 +36,11 @@ class SensorTests(unittest.TestCase):
                 """
             )
         self.client = TestClient(main.app)
+        login = self.client.post(
+            "/guard/login",
+            json={"username": main.GUARD_USERNAME, "password": main.GUARD_PASSWORD},
+        )
+        self.client.headers["Authorization"] = f"Bearer {login.json()['token']}"
         self.client.post(
             "/gateway/slot-map",
             json=[

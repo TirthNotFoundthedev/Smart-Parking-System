@@ -20,29 +20,6 @@
   --radius: 8px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #15171a;
-    --panel: #1e2125;
-    --ink: #eceae4;
-    --ink-soft: #a3a8ae;
-    --line: #34383d;
-    --accent: #3d9966;
-    --accent-ink: #0c1a12;
-    --free: #6fcf97;
-    --free-bg: #1c3226;
-    --held: #e8b84a;
-    --held-bg: #3a2f14;
-    --busy: #8fb0f0;
-    --busy-bg: #1d2a47;
-    --warn: #f08a8a;
-    --warn-bg: #3d1f1f;
-    --off: #a3a8ae;
-    --off-bg: #2a2d31;
-    --focus: #7fa8f5;
-  }
-}
-
 * { box-sizing: border-box; }
 
 body {
@@ -68,19 +45,13 @@ h2 { font-size: 16px; }
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
 }
-.topbar-right { display: flex; align-items: center; gap: 12px; }
+.topbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .conn { font-size: 13px; color: var(--ink-soft); display: inline-flex; align-items: center; gap: 6px; }
 .conn::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--off); }
 .conn[data-state="ok"]::before { background: var(--free); }
 .conn[data-state="down"]::before { background: var(--warn); }
 .conn[data-state="down"] { color: var(--warn); }
 
-.settings {
-  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-  padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
-}
-.settings[hidden] { display: none; }
-.settings input { flex: 1 1 260px; margin: 0; }
 
 /* layout */
 .layout {
@@ -191,4 +162,21 @@ td.plate { font-weight: 700; letter-spacing: 0.04em; }
 
 @media (prefers-reduced-motion: no-preference) {
   .slot, .btn { transition: background-color 0.15s, border-color 0.15s; }
+}
+
+[hidden] { display: none !important; }
+
+/* login */
+.login { max-width: 380px; margin: 12vh auto 0; padding: 0 16px; }
+.login .panel { padding: 20px; }
+.login h1 { font-size: 22px; margin-bottom: 4px; }
+.login p { margin: 0 0 8px; color: var(--ink-soft); }
+.login-error { margin-top: 12px; color: var(--warn); font-weight: 600; min-height: 1.4em; }
+
+/* plate on slot tiles */
+.slot .plate { font-weight: 700; color: var(--ink); letter-spacing: 0.04em; font-size: 13px; margin-top: 2px; }
+
+@media (max-width: 760px) {
+  .topbar { flex-wrap: wrap; gap: 8px; }
+  th, td { padding: 8px 8px; }
 }

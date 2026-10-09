@@ -10,7 +10,7 @@ Status: v1 draft, agreed decisions from the design discussion on 2026-10-08.
 | Slot sensing | One IR sensor per slot, 5 per Arduino node. |
 | In-lot link | RS485 half-duplex bus, gateway is master, nodes are slaves. |
 | Gateway | Laptop or Raspberry Pi running a Python bridge for the demo. ESP32 is the production story (same protocol). |
-| Server | Existing FastAPI + SQLite backend in `Server/`. No cloud hosting for now. |
+| Server | Existing FastAPI + SQLite backend in `backend/`. No cloud hosting for now. |
 | Booking model | Walk-ins and reservations. Slot is auto-assigned by the server. Guard confirms at the gate. |
 | Users | One web app. Anonymous by default (enter number plate, get directions). Optional install/account for regulars, with pre-booking. |
 | Guard | Dashboard plus manual gate control. Gets alerts for sensor/booking mismatches. |

@@ -41,6 +41,11 @@ class GateExitTests(unittest.TestCase):
             )
         main.init_db()
         self.client = TestClient(main.app)
+        login = self.client.post(
+            "/guard/login",
+            json={"username": main.GUARD_USERNAME, "password": main.GUARD_PASSWORD},
+        )
+        self.client.headers["Authorization"] = f"Bearer {login.json()['token']}"
 
     def query(self, sql, params=()):
         with closing(sqlite3.connect(self.db_path)) as conn:
