@@ -255,6 +255,11 @@ def guard_login(data: GuardLogin):
     return {"token": token}
 
 
+def _key_matches(given: str, expected: str) -> bool:
+    # Bytes, because compare_digest raises TypeError on non-ASCII str.
+    return hmac.compare_digest(given.encode(), expected.encode())
+
+
 def require_guard(
     authorization: str | None = Header(default=None),
     x_gateway_key: str | None = Header(default=None),
@@ -264,7 +269,7 @@ def require_guard(
     if scheme == "Bearer" and token in guard_tokens:
         return
     expected = os.environ.get("PARKING_GATEWAY_KEY")
-    if expected and x_gateway_key is not None and hmac.compare_digest(x_gateway_key, expected):
+    if expected and x_gateway_key is not None and _key_matches(x_gateway_key, expected):
         return
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -405,14 +410,9 @@ def gate_entry(data: GateEntry):
             new_id = str(uuid.uuid4())
             conn.execute(
                 "INSERT INTO users (id, name, numberplate, phonenumber) VALUES (?, ?, ?, ?)",
-                (new_id, data.username, data.number_plate, data.phone_number),
+                (new_id, data.username.strip(), data.number_plate.strip(), data.phone_number.strip()),
             )
-            user_data = {
-                "id": new_id,
-                "name": data.username,
-                "numberplate": data.number_plate,
-                "phonenumber": data.phone_number,
-            }
+            user_data = dict(conn.execute("SELECT * FROM users WHERE id = ?", (new_id,)).fetchone())
 
         active = conn.execute(
             "SELECT slotid FROM logs WHERE userid = ? AND endtime IS NULL",
@@ -588,8 +588,11 @@ def update_parking_slot(slot_id: str, data: SlotUpdate):
                 )
 
             now = datetime.now(timezone.utc)
-            if release and holder is not None:
-                _end_holding(conn, holder, "cancelled", now)
+            if release:
+                if holder is not None:
+                    _end_holding(conn, holder, "cancelled", now)
+                else:
+                    conn.execute("UPDATE parkingslots SET digitalstatus = 0 WHERE id = ?", (slot_id,))
             elif assign:
                 user = _user_for_plate(conn, plate)
                 if holder is None or holder["userid"] != user["id"]:
@@ -615,6 +618,7 @@ def update_parking_slot(slot_id: str, data: SlotUpdate):
                     if slot["physicalstatus"]:
                         conn.execute("UPDATE bookings SET status = 'parked' WHERE id = ?", (booking_id,))
                     conn.execute("UPDATE parkingslots SET digitalstatus = 1 WHERE id = ?", (slot_id,))
+                    bookings.resolve_alerts(conn, "unbooked_car", slot_id, now=now)
 
             if data.name is not None:
                 conn.execute("UPDATE parkingslots SET name = ? WHERE id = ?", (data.name.strip(), slot_id))
@@ -679,7 +683,7 @@ def require_gateway_key(x_gateway_key: str | None):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Gateway access is not configured (set PARKING_GATEWAY_KEY).",
         )
-    if x_gateway_key is None or not hmac.compare_digest(x_gateway_key, expected):
+    if x_gateway_key is None or not _key_matches(x_gateway_key, expected):
         logger.warning("Gateway request rejected: bad or missing X-Gateway-Key")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
