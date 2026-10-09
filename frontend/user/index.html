@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>My parking</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    input {
+      font-size: 1.2rem;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+    input::placeholder { letter-spacing: 0; text-transform: none; }
+    button {
+      width: 100%;
+      min-height: 52px;
+      margin-top: 1rem;
+    }
+    button.secondary {
+      min-height: 44px;
+      margin-top: .6rem;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--line);
+    }
+    .slot { margin: 0; color: var(--muted); }
+    .slot-name { margin: .1rem 0 0; font-size: clamp(2.2rem, 11vw, 3rem); font-weight: 700; line-height: 1.1; }
+    .details { display: grid; grid-template-columns: 1fr auto; gap: .6rem 1rem; margin: 1.25rem 0 0; padding-top: 1.25rem; border-top: 1px solid var(--line); }
+    .details dt { color: var(--muted); }
+    .details dd { margin: 0; font-weight: 650; text-align: right; }
+    .details .total { font-size: 1.4rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>My parking</h1>
+    <p class="intro">Enter your number plate to see your slot, how long you have parked and what you owe so far.</p>
+
+    <form id="lookup" class="panel">
+      <label for="number-plate">Number plate</label>
+      <input id="number-plate" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="For example, ABC123" required>
+      <button id="submit" type="submit">Find my slot</button>
+      <button id="clear" class="secondary" type="button" hidden>Not your car? Clear</button>
+      <p id="message" class="message" role="alert" hidden></p>
+    </form>
+
+    <section id="result" class="panel" aria-live="polite" hidden>
+      <p class="slot">Your slot</p>
+      <p id="slot-name" class="slot-name"></p>
+      <p id="result-plate" class="slot" hidden></p>
+      <dl class="details">
+        <dt>Floor</dt><dd id="floor"></dd>
+        <dt>Time parked</dt><dd id="duration"></dd>
+        <dt>Cost so far</dt><dd id="cost" class="total"></dd>
+      </dl>
+      <p class="note">Rs 20 fixed plus Rs 3 for every 10 minutes started. Updates every 15 seconds.</p>
+    </section>
+  </main>
+  <script src="../config.js"></script>
+  <script src="../shared/api.js"></script>
+  <script src="user.js"></script>
+</body>
+</html>

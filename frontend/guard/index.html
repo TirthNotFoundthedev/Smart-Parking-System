@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Guard Console</title>
+  <link rel="stylesheet" href="guard.css">
+</head>
+<body>
+  <section id="login-view" class="login" hidden>
+    <form class="panel" id="login-form" autocomplete="off">
+      <h1>Guard Console</h1>
+      <p>Log in to manage the gate and the lot.</p>
+      <label for="login-user">Username</label>
+      <input id="login-user" name="username" required autocomplete="username" autocapitalize="none" spellcheck="false">
+      <label for="login-pass">Password</label>
+      <input id="login-pass" name="password" type="password" required autocomplete="current-password">
+      <button class="btn btn-primary" type="submit">Log in</button>
+      <div id="login-error" class="login-error" role="alert"></div>
+    </form>
+  </section>
+
+  <div id="app-view" hidden>
+  <header class="topbar">
+    <h1>Guard Console</h1>
+    <div class="topbar-right">
+      <span id="conn" class="conn" data-state="connecting" role="status">Connecting...</span>
+      <button id="logout-btn" class="btn btn-quiet" type="button">Log out</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel gate" aria-labelledby="gate-title">
+      <h2 id="gate-title">Gate</h2>
+
+      <div class="tabs" role="tablist" aria-label="Gate action">
+        <button class="tab" role="tab" id="tab-entry" aria-selected="true" aria-controls="form-entry" type="button">Entry</button>
+        <button class="tab" role="tab" id="tab-exit" aria-selected="false" aria-controls="form-exit" type="button" tabindex="-1">Exit</button>
+      </div>
+
+      <form id="form-entry" role="tabpanel" aria-labelledby="tab-entry" autocomplete="off">
+        <label for="entry-plate">Number plate <span class="req">required</span></label>
+        <input id="entry-plate" name="plate" required autocapitalize="characters" spellcheck="false" placeholder="TS09AB1234">
+        <label for="entry-name">Driver name <span class="opt">optional</span></label>
+        <input id="entry-name" name="name" placeholder="Alex">
+        <label for="entry-phone">Phone <span class="opt">optional</span></label>
+        <input id="entry-phone" name="phone" inputmode="tel" placeholder="9876543210">
+        <button class="btn btn-primary" type="submit">Assign slot</button>
+      </form>
+
+      <form id="form-exit" role="tabpanel" aria-labelledby="tab-exit" autocomplete="off" hidden>
+        <label for="exit-plate">Number plate <span class="req">required</span></label>
+        <input id="exit-plate" name="plate" required autocapitalize="characters" spellcheck="false" placeholder="TS09AB1234">
+        <label for="exit-phone">Phone <span class="opt">optional</span></label>
+        <input id="exit-phone" name="phone" inputmode="tel" placeholder="Only if the plate is unknown">
+        <button class="btn btn-primary" type="submit">Check out</button>
+      </form>
+
+      <div id="gate-result" class="result" aria-live="polite"></div>
+    </section>
+
+    <section class="panel lot" aria-labelledby="lot-title">
+      <div class="panel-head">
+        <h2 id="lot-title">Lot</h2>
+        <ul id="legend" class="legend" aria-label="Legend"></ul>
+      </div>
+      <div id="availability" class="availability"></div>
+      <div id="slots"></div>
+    </section>
+
+    <section class="panel lists" aria-labelledby="lists-title">
+      <h2 id="lists-title" class="sr-only">Cars and alerts</h2>
+      <div class="tabs" role="tablist" aria-label="Lists">
+        <button class="tab" role="tab" id="tab-active" aria-selected="true" aria-controls="list-active" type="button">Cars in lot <span id="count-active" class="count">0</span></button>
+        <button class="tab" role="tab" id="tab-alerts" aria-selected="false" aria-controls="list-alerts" type="button" tabindex="-1">Alerts <span id="count-alerts" class="count">0</span></button>
+        <button class="tab" role="tab" id="tab-history" aria-selected="false" aria-controls="list-history" type="button" tabindex="-1">History</button>
+      </div>
+      <div id="list-active" role="tabpanel" aria-labelledby="tab-active"></div>
+      <div id="list-alerts" role="tabpanel" aria-labelledby="tab-alerts" hidden></div>
+      <div id="list-history" role="tabpanel" aria-labelledby="tab-history" hidden></div>
+    </section>
+  </main>
+  </div>
+
+  <dialog id="slot-dialog" aria-label="Slot details"></dialog>
+
+  <script src="../config.js"></script>
+  <script src="../shared/api.js"></script>
+  <script src="guard.js"></script>
+</body>
+</html>

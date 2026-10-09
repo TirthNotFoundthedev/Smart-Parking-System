@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sensor simulator</title>
+  <link rel="stylesheet" href="sensor.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>Sensor simulator</h1>
+      <span class="badge">Not real hardware</span>
+    </div>
+    <div class="topbar-right">
+      <span id="conn" class="conn" data-state="connecting" role="status">Connecting...</span>
+      <button id="settings-btn" class="btn btn-quiet" type="button" aria-expanded="false" aria-controls="settings">Gateway key</button>
+    </div>
+  </header>
+
+  <form id="settings" class="settings" hidden>
+    <div class="field">
+      <label for="gateway-key">Gateway key <span class="opt">same as PARKING_GATEWAY_KEY on the server</span></label>
+      <input id="gateway-key" type="password" autocomplete="off" placeholder="Required for sensors and cameras">
+    </div>
+    <button class="btn" type="submit">Save</button>
+  </form>
+
+  <p id="key-notice" class="notice" hidden>
+    Enter the gateway key under <strong>Gateway key</strong> to send sensor readings and plate reads.
+  </p>
+
+  <main class="layout">
+    <section class="panel readers" aria-labelledby="readers-title">
+      <h2 id="readers-title">Number plate readers</h2>
+
+      <form id="reader-entry" class="reader" autocomplete="off">
+        <h3>Entry camera</h3>
+        <label for="entry-plate">Plate seen</label>
+        <div class="row">
+          <input id="entry-plate" required autocapitalize="characters" spellcheck="false" placeholder="TS09AB1234">
+          <button class="btn" type="button" data-random="entry-plate">Random</button>
+        </div>
+        <button class="btn btn-primary" type="submit">Read plate</button>
+        <div id="entry-result" class="result" aria-live="polite"></div>
+      </form>
+
+      <form id="reader-exit" class="reader" autocomplete="off">
+        <h3>Exit camera</h3>
+        <label for="exit-plate">Plate seen</label>
+        <div class="row">
+          <input id="exit-plate" required autocapitalize="characters" spellcheck="false" placeholder="TS09AB1234" list="parked-plates">
+          <datalist id="parked-plates"></datalist>
+          <button class="btn" type="button" data-random="exit-plate">Random</button>
+        </div>
+        <p class="hint">Pick a car currently in the lot, or type any plate.</p>
+        <button class="btn btn-primary" type="submit">Read plate</button>
+        <div id="exit-result" class="result" aria-live="polite"></div>
+      </form>
+    </section>
+
+    <section class="panel sensors" aria-labelledby="sensors-title">
+      <div class="panel-head">
+        <h2 id="sensors-title">Parking slots and sensors</h2>
+        <div class="actions">
+          <button id="register-btn" class="btn btn-small" type="button">Register nodes</button>
+          <button id="clear-btn" class="btn btn-small" type="button">Clear all sensors</button>
+        </div>
+      </div>
+      <p class="hint">Click a slot to put a car in front of its sensor or take it away. Five sensors per node, as in the hardware design. Slot colors match the guard slot map.</p>
+      <div id="legend" class="legend"></div>
+      <div id="nodes"></div>
+    </section>
+
+    <section class="panel log-panel" aria-labelledby="log-title">
+      <h2 id="log-title">What was sent</h2>
+      <ol id="log" class="log" aria-live="polite"></ol>
+    </section>
+  </main>
+
+  <script src="../config.js"></script>
+  <script src="../shared/api.js"></script>
+  <script src="sensor.js"></script>
+</body>
+</html>
