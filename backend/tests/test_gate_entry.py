@@ -47,6 +47,7 @@ class GateEntryTests(unittest.TestCase):
                 """
             )
 
+        main.init_db()
         self.client = TestClient(main.app)
         login = self.client.post(
             "/guard/login",
