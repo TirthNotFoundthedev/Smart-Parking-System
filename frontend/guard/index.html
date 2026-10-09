@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Guard</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    [hidden] { display: none !important; }
+    h2 { margin: 0; font-size: 1.15rem; }
+    .row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; }
+    .field { margin-bottom: 1rem; }
+    .hint { margin: .5rem 0 0; font-size: .92rem; color: var(--muted); }
+    .actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1.25rem; }
+    .status { min-height: 1.5rem; margin: 1rem 0 0; color: var(--muted); }
+    .status[data-state="error"] { color: var(--error); font-weight: 600; }
+    .warning { margin: 1rem 0 0; padding: .8rem; border: 1px solid #a9682c; border-radius: 6px; color: #603b19; background: #fff4df; }
+    .details { display: grid; grid-template-columns: minmax(6.5rem, .8fr) minmax(0, 1.2fr); gap: .6rem 1rem; margin: 1rem 0 0; overflow-wrap: anywhere; }
+    .details dt { color: var(--muted); }
+    .details dd { margin: 0; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Guard</h1>
+
+    <section id="login-view" class="panel" aria-labelledby="login-title">
+      <h2 id="login-title">Sign in</h2>
+      <form id="login-form" novalidate>
+        <div class="field">
+          <label for="username">Username</label>
+          <input id="username" name="username" autocomplete="username">
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password">
+        </div>
+        <div class="actions">
+          <button id="login-submit" type="submit">Sign in</button>
+        </div>
+      </form>
+      <p id="login-message" class="message" role="alert" hidden></p>
+    </section>
+
+    <section id="gate-view" class="panel" aria-labelledby="gate-title" hidden>
+      <div class="row">
+        <h2 id="gate-title">Gate entry</h2>
+        <button id="logout" type="button" class="secondary">Log out</button>
+      </div>
+      <form id="gate-form" novalidate>
+        <div class="field">
+          <label for="number-plate">Vehicle number plate</label>
+          <input id="number-plate" name="number_plate" autocomplete="off" placeholder="For example, ABC123">
+        </div>
+        <div class="field">
+          <label for="phone-number">Phone number</label>
+          <input id="phone-number" name="phone_number" type="tel" autocomplete="off" placeholder="For example, 5551000">
+        </div>
+        <div class="field">
+          <label for="visitor-name">Name <span class="hint">(optional)</span></label>
+          <input id="visitor-name" name="username" autocomplete="off">
+        </div>
+        <p class="hint">Enter a plate, a phone number, or both. Blank values are sent as NA.</p>
+        <div class="actions">
+          <button id="entry-submit" type="submit">Submit gate entry</button>
+          <button type="reset" class="secondary">Clear form</button>
+        </div>
+      </form>
+      <p id="gate-status" class="status" role="status" data-state="idle"></p>
+      <p id="gate-warning" class="warning" role="alert" hidden></p>
+      <dl id="gate-result" class="details" hidden></dl>
+    </section>
+  </main>
+
+  <script src="../config.js"></script>
+  <script src="../shared/api.js"></script>
+  <script src="guard.js"></script>
+</body>
+</html>

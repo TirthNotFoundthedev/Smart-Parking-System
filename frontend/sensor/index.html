@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sensor simulator</title>
+  <link rel="stylesheet" href="../shared/style.css">
+  <style>
+    main { width: min(100% - 2rem, 48rem); }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; margin-top: 1.5rem; }
+    .toolbar .note { margin: 0; }
+    .floor { margin-top: 1.5rem; }
+    .floor h2 { margin: 0 0 .5rem; font-size: 1.15rem; }
+    .slot-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+    .slot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; padding: .9rem 1rem; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+    .slot-info { min-width: 0; }
+    .slot-name { margin: 0; font-weight: 650; }
+    .slot-meta { margin: .2rem 0 0; color: var(--muted); font-size: .95rem; }
+    .slot-actions { display: flex; align-items: center; gap: .75rem; }
+    .status { font-weight: 650; }
+    .slot button { min-width: 10rem; }
+    .panel p { margin: 0; }
+    .loading, .empty, .error { text-align: left; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Sensor simulator</h1>
+    <p class="intro">Mock the physical parking sensors. Toggle a slot to report a car as present or gone.</p>
+
+    <div class="toolbar">
+      <p class="note" id="updated" aria-live="polite"></p>
+      <button type="button" class="secondary" id="refresh">Refresh</button>
+    </div>
+
+    <div id="message" class="message" role="alert" hidden></div>
+    <p id="status" class="panel loading" role="status">Loading slots...</p>
+    <div id="floors"></div>
+  </main>
+  <script src="../config.js"></script>
+  <script src="../shared/api.js"></script>
+  <script src="sensor.js"></script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
@@ -47,6 +48,11 @@ class GateEntryTests(unittest.TestCase):
             )
 
         self.client = TestClient(main.app)
+        login = self.client.post(
+            "/guard/login",
+            json={"username": main.GUARD_USERNAME, "password": main.GUARD_PASSWORD},
+        )
+        self.client.headers["Authorization"] = f"Bearer {login.json()['token']}"
 
     def add_user(
         self,
@@ -89,14 +95,6 @@ class GateEntryTests(unittest.TestCase):
                 "SELECT * FROM users WHERE id = ?", (user_id,)
             ).fetchone()
         return dict(row) if row else None
-
-    def test_gate_entry_dashboard_renders_ui_that_posts_to_gate_entry(self):
-        response = self.client.get("/dashboard/gate-entry")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn('fetch("/gate-entry"', response.text)
-        self.assertIn("Draft without direction", response.text)
 
     def get_slot(self, slot_id):
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -391,6 +389,123 @@ class GateEntryTests(unittest.TestCase):
         self.assertEqual(second.status_code, 409)
         self.assertEqual(self.get_slot("slot-2")["digitalstatus"], 0)
         self.assertEqual(len(self.log_rows()), 1)
+
+    def start_booking(self, minutes_ago):
+        self.add_user(number_plate="ABC123")
+        self.add_slot()
+        started = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                "INSERT INTO logs (id, slotid, starttime, userid) VALUES (?, ?, ?, ?)",
+                ("log-1", "slot-1", started.isoformat(), "user-1"),
+            )
+
+    def test_parking_status_charges_every_started_ten_minute_block(self):
+        self.start_booking(minutes_ago=25)
+
+        response = self.client.get("/parking-status", params={"number_plate": "abc123"})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["slot_name"], "SLOT-001")
+        self.assertEqual(body["minutes_parked"], 25)
+        self.assertEqual(body["cost"], 20 + 3 * 3)
+
+    def test_parking_status_is_404_without_an_open_booking(self):
+        self.add_user()
+
+        response = self.client.get("/parking-status", params={"number_plate": "ABC123"})
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_guard_login_returns_a_token_that_opens_gate_entry(self):
+        client = TestClient(main.app)
+
+        response = client.post(
+            "/guard/login",
+            json={"username": "user1234", "password": "pass1234"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        token = response.json()["token"]
+        self.assertIn(token, main.guard_tokens)
+        self.add_slot()
+        entry = client.post(
+            "/gate-entry",
+            json={"number_plate": "TOK123"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self.assertEqual(entry.status_code, 200)
+
+    def test_guard_login_rejects_wrong_credentials(self):
+        client = TestClient(main.app)
+        for payload in (
+            {"username": "user1234", "password": "wrong"},
+            {"username": "wrong", "password": "pass1234"},
+            {"username": "user1234", "password": "pass1234 "},
+        ):
+            with self.subTest(payload=payload):
+                response = client.post("/guard/login", json=payload)
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(
+                    response.json()["detail"], "Wrong username or password."
+                )
+
+    def test_gate_entry_without_token_is_unauthorized(self):
+        self.add_slot()
+        client = TestClient(main.app)
+
+        response = client.post("/gate-entry", json={"number_plate": "NOAUTH1"})
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"detail": "Guard login required."})
+        self.assertEqual(self.get_slot("slot-1")["digitalstatus"], 0)
+
+    def test_gate_entry_with_unknown_token_is_unauthorized(self):
+        self.add_slot()
+        client = TestClient(main.app)
+
+        response = client.post(
+            "/gate-entry",
+            json={"number_plate": "NOAUTH2"},
+            headers={"Authorization": "Bearer not-a-real-token"},
+        )
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"detail": "Guard login required."})
+
+    def test_cors_header_is_sent_for_cross_origin_requests(self):
+        response = TestClient(main.app).get(
+            "/health", headers={"Origin": "http://localhost:3000"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["access-control-allow-origin"], "*")
+
+    def test_sensor_sets_physical_status_of_a_slot(self):
+        self.add_slot()
+        client = TestClient(main.app)
+
+        occupied = client.put("/sensor/slots/slot-1", json={"occupied": True})
+
+        self.assertEqual(occupied.status_code, 200)
+        self.assertEqual(occupied.json()["id"], "slot-1")
+        self.assertEqual(occupied.json()["physicalstatus"], 1)
+        self.assertEqual(self.get_slot("slot-1")["physicalstatus"], 1)
+
+        cleared = client.put("/sensor/slots/slot-1", json={"occupied": False})
+
+        self.assertEqual(cleared.status_code, 200)
+        self.assertEqual(cleared.json()["physicalstatus"], 0)
+        self.assertEqual(self.get_slot("slot-1")["physicalstatus"], 0)
+
+    def test_sensor_unknown_slot_is_not_found(self):
+        response = TestClient(main.app).put(
+            "/sensor/slots/missing", json={"occupied": True}
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "Slot not found.")
 
 
 if __name__ == "__main__":

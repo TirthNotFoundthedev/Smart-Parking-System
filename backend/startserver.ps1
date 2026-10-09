@@ -4,14 +4,14 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ServerDirectory = $PSScriptRoot
-$Python = Join-Path $ServerDirectory ".venv\Scripts\python.exe"
+$backendDirectory = $PSScriptRoot
+$Python = Join-Path $backendDirectory ".venv\Scripts\python.exe"
 
 if (-not (Test-Path -LiteralPath $Python)) {
-    throw "Project Python environment not found at '$Python'. Create it first with 'uv sync' from the Server directory."
+    throw "Project Python environment not found at '$Python'. Create it first with 'uv sync' from the backend directory."
 }
 
-Push-Location $ServerDirectory
+Push-Location $backendDirectory
 try {
     & $Python -m uvicorn server.main:app --app-dir src --host $BindHost --port $Port
 }

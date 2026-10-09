@@ -12,3 +12,4 @@ wheels/
 # Local database and generated test report
 parking.db
 result.html
+logs/

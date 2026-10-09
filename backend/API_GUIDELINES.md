@@ -1,7 +1,8 @@
 # Parking Server API Guidelines
 
 This guide describes the HTTP API currently implemented by the FastAPI server.
-The API uses JSON and has no authentication configured.
+The server is API-only and uses JSON. `POST /gate-entry` requires a guard
+login token; the sensor endpoint and the read endpoints are public.
 
 ## Base URL
 
@@ -24,8 +25,10 @@ OpenAPI schema is at `{BASE_URL}/openapi.json`.
 | --- | --- | --- |
 | `GET` | `/health` | Check whether the API is responding. |
 | `GET` | `/parking-slots` | List all parking slots. |
-| `POST` | `/gate-entry` | Find or create a user and book one available slot. |
-| `GET` | `/dashboard/gate-entry` | Browser test page that submits to `POST /gate-entry`. |
+| `GET` | `/parking-status` | Active booking, time parked and cost for a number plate. |
+| `POST` | `/guard/login` | Log in as the guard and receive a bearer token. |
+| `POST` | `/gate-entry` | Find or create a user and book one available slot. Requires a guard token. |
+| `PUT` | `/sensor/slots/{slot_id}` | Set a slot's physical occupancy, as a hardware sensor does. Public. |
 | `GET` | `/` | Basic server greeting. |
 
 Paths are relative to the base URL. For example:
@@ -75,20 +78,73 @@ Example (`200 OK`):
 typically serialized as `0` (false) or `1` (true). A slot is eligible for
 booking only when both values are `0`.
 
+## Guard login
+
+### `POST /guard/login`
+
+Send a JSON request with `Content-Type: application/json`.
+
+```json
+{
+  "username": "user1234",
+  "password": "pass1234"
+}
+```
+
+Successful response (`200 OK`):
+
+```json
+{
+  "token": "b1Xc0...random-url-safe-string"
+}
+```
+
+Send the token on guarded requests as `Authorization: Bearer <token>`. Tokens
+are random and kept in server memory, so they are invalid after a server
+restart. Logging in again returns a new token; earlier tokens stay valid until
+restart. The credentials are fixed server constants.
+
+Errors: `401 Unauthorized` with `{"detail":"Wrong username or password."}`.
+
+## Sensor
+
+### `PUT /sensor/slots/{slot_id}`
+
+Public endpoint for a hardware sensor. It needs no token. Send:
+
+```json
+{
+  "occupied": true
+}
+```
+
+`occupied: true` sets `physicalstatus` to `1`; `false` sets it to `0`. The
+response is the updated slot, in the same shape as an item from
+`GET /parking-slots`:
+
+```json
+{
+  "id": "slot-001",
+  "name": "SLOT-001",
+  "digitalstatus": 0,
+  "physicalstatus": 1,
+  "floor": "B1"
+}
+```
+
+Errors: `404 Not Found` with `{"detail":"Slot not found."}` when no slot has
+that `slot_id`.
+
 ## Gate entry and slot booking
 
-### `GET /dashboard/gate-entry`
-
-Opens a browser form for manually testing gate entry. The page sends its JSON
-request to `POST /gate-entry` and displays that endpoint's success or error
-response; it does not implement separate user lookup or slot-booking logic.
-The design read is a calm test utility for checking a gate-entry request,
-with the form and response paired so the outcome stays beside its input. The
-page is a draft without supplied design direction at ENERGY 1 / RHYTHM 1 /
-MOTION 1. Its paper-and-ink palette keeps the tool quiet, with green reserved
-for submission; the system font avoids a remote font dependency.
-
 ### `POST /gate-entry`
+
+Requires `Authorization: Bearer <token>` from `POST /guard/login`. Without a
+valid token the response is `401 Unauthorized`:
+
+```json
+{"detail":"Guard login required."}
+```
 
 Send a JSON request with `Content-Type: application/json`.
 
@@ -178,6 +234,7 @@ Content-Type: application/json
 | HTTP status | Meaning | Example response |
 | --- | --- | --- |
 | `400 Bad Request` | Both identifiers are absent or treated as `"NA"`. | `{"detail":"Please provide either number plate or phone number."}` |
+| `401 Unauthorized` | Missing, unknown, or malformed guard token. | `{"detail":"Guard login required."}` |
 | `409 Conflict` | The user already has an active booking. | `{"detail":"User already has an active parking booking."}` |
 | `404 Not Found` | No available parking slot could be booked. | `{"detail":"No available parking slots."}` |
 | `422 Unprocessable Entity` | Invalid JSON, missing required `number_plate`, or a field has the wrong type. | FastAPI validation response with a `detail` array. |
@@ -187,23 +244,50 @@ The frontend should check `response.ok` before treating a request as
 successful, and should show the `detail` value (or validation details) for
 errors.
 
+## Parking status
+
+### `GET /parking-status?number_plate=ABC123`
+
+Returns the open booking for a number plate (case-insensitive). Cost is
+Rs 20 fixed plus Rs 3 for every started 10-minute block.
+
+```json
+{
+  "slot_name": "SLOT-001",
+  "floor": "B1",
+  "starttime": "2026-10-09T10:00:00+00:00",
+  "minutes_parked": 25,
+  "cost": 29
+}
+```
+
+Errors: `400` for a blank plate, `404` when the plate has no open booking.
+
 ## Browser integration and CORS
 
-CORS is not currently configured by this server. A browser frontend served
-from a different origin (for example, a different port such as
-`http://localhost:3000`) may have its API request blocked by the browser until
-the backend explicitly allows that frontend origin. For local testing, a
-same-origin setup or a frontend development-server proxy avoids this; for
-separate origins, ask the backend maintainer to configure FastAPI CORS for the
-frontend's exact development and production origins. Do not disable browser
-security checks.
+The server enables FastAPI `CORSMiddleware`. Allowed origins come from the
+`CORS_ORIGINS` environment variable, a comma-separated list such as:
+
+```text
+CORS_ORIGINS=http://localhost:3000,https://parking.example.com
+```
+
+If `CORS_ORIGINS` is unset, it defaults to `*` (any origin). All methods and
+headers are allowed. Credentials are not allowed, so the frontend sends the
+guard token in the `Authorization` header rather than in cookies. Set
+`CORS_ORIGINS` to the frontend's exact origins in any shared or production
+deployment. The variable is read when the server starts, so restart the server
+after changing it.
 
 Example frontend request:
 
 ```javascript
 const response = await fetch(`${API_BASE_URL}/gate-entry`, {
   method: "POST",
-  headers: { "Content-Type": "application/json" },
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${guardToken}`,
+  },
   body: JSON.stringify({
     number_plate: "ABC123",
     phone_number: "5551000",
