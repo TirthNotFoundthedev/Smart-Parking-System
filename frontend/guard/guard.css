@@ -180,3 +180,15 @@ td.plate { font-weight: 700; letter-spacing: 0.04em; }
   .topbar { flex-wrap: wrap; gap: 8px; }
   th, td { padding: 8px 8px; }
 }
+
+dialog { width: min(100% - 32px, 26rem); padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--ink); background: var(--panel); }
+dialog::backdrop { background: rgba(29, 31, 33, 0.4); }
+dialog h2 { margin: 0 0 4px; font-size: 1.15rem; }
+select { width: 100%; min-height: 44px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--ink); background: #fff; font: inherit; }
+.slot-form .hint { margin: 6px 0 0; font-size: 13px; color: var(--ink-soft); }
+.facts { display: grid; gap: 6px; margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--line); }
+.fact { display: flex; justify-content: space-between; gap: 12px; }
+.fact dt { color: var(--ink-soft); }
+.fact dd { margin: 0; font-weight: 600; }
+.dialog-actions { display: flex; gap: 10px; margin-top: 16px; }
+.dialog-actions .btn { flex: 1; margin-top: 0; width: auto; }

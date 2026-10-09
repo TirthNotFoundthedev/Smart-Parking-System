@@ -544,6 +544,112 @@ def gate_exit(data: GateExit):
     }
 
 
+#! Guard slot editing
+
+class SlotUpdate(BaseModel):
+    name: str | None = None
+    floor: str | None = None
+    digitalstatus: bool | None = None
+    # None leaves the holder alone; "" or "NA" releases the slot.
+    number_plate: str | None = None
+
+
+@app.put("/parking-slots/{slot_id}", dependencies=[Depends(require_guard)])
+def update_parking_slot(slot_id: str, data: SlotUpdate):
+    """Guard edit of one slot: name, floor, digital status and assigned plate."""
+    plate = data.number_plate.strip() if data.number_plate is not None else None
+    release = plate is not None and plate.upper() in ("", "NA")
+    assign = plate is not None and not release
+    if data.name is not None and not data.name.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Slot name cannot be empty.")
+    if data.floor is not None and not data.floor.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Floor cannot be empty.")
+    if assign and data.digitalstatus is False:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot assign a number plate and set the slot to free.",
+        )
+    release = release or (data.digitalstatus is False and not assign)
+
+    with closing(get_db()) as conn:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            slot = conn.execute("SELECT * FROM parkingslots WHERE id = ?", (slot_id,)).fetchone()
+            if slot is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Slot not found.")
+            holder = conn.execute(
+                "SELECT * FROM bookings WHERE slotid = ? AND status IN ('assigned', 'parked') LIMIT 1",
+                (slot_id,),
+            ).fetchone()
+            if data.digitalstatus is True and not assign and holder is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Enter a number plate to mark a free slot as assigned.",
+                )
+
+            now = datetime.now(timezone.utc)
+            if release and holder is not None:
+                _end_holding(conn, holder, "cancelled", now)
+            elif assign:
+                user = _user_for_plate(conn, plate)
+                if holder is None or holder["userid"] != user["id"]:
+                    elsewhere = conn.execute(
+                        """
+                        SELECT p.name FROM bookings b JOIN parkingslots p ON p.id = b.slotid
+                        WHERE b.userid = ? AND b.status IN ('assigned', 'parked')
+                        """,
+                        (user["id"],),
+                    ).fetchone()
+                    if elsewhere:
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail=f"{user['numberplate']} is already assigned to {elsewhere['name']}.",
+                        )
+                    if holder is not None:
+                        _end_holding(conn, holder, "cancelled", now)
+                    conn.execute(
+                        "INSERT INTO logs (id, slotid, starttime, userid) VALUES (?, ?, ?, ?)",
+                        (str(uuid.uuid4()), slot_id, now.isoformat(), user["id"]),
+                    )
+                    booking_id = bookings.create_walkin_booking(conn, user["id"], slot_id, now)
+                    if slot["physicalstatus"]:
+                        conn.execute("UPDATE bookings SET status = 'parked' WHERE id = ?", (booking_id,))
+                    conn.execute("UPDATE parkingslots SET digitalstatus = 1 WHERE id = ?", (slot_id,))
+
+            if data.name is not None:
+                conn.execute("UPDATE parkingslots SET name = ? WHERE id = ?", (data.name.strip(), slot_id))
+            if data.floor is not None:
+                conn.execute("UPDATE parkingslots SET floor = ? WHERE id = ?", (data.floor.strip(), slot_id))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    logger.info("Guard edited slot %s", slot_id)
+    return next(s for s in parking_slots() if s["id"] == slot_id)
+
+
+def _end_holding(conn, booking, outcome: str, now: datetime) -> None:
+    conn.execute("UPDATE bookings SET status = ? WHERE id = ?", (outcome, booking["id"]))
+    conn.execute(
+        "UPDATE logs SET endtime = ? WHERE userid = ? AND slotid = ? AND endtime IS NULL",
+        (now.isoformat(), booking["userid"], booking["slotid"]),
+    )
+    conn.execute("UPDATE parkingslots SET digitalstatus = 0 WHERE id = ?", (booking["slotid"],))
+
+
+def _user_for_plate(conn, plate: str):
+    row = conn.execute("SELECT * FROM users WHERE numberplate = ? COLLATE NOCASE", (plate,)).fetchone()
+    if row:
+        return row
+    user_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO users (id, name, numberplate, phonenumber) VALUES (?, 'NA', ?, 'NA')",
+        (user_id, plate),
+    )
+    return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+
+
 #! Log history
 
 @app.get("/logs", dependencies=[Depends(require_guard)])

@@ -168,20 +168,18 @@ function renderSlots() {
                 h("div", { class: "state" }, SLOT_STATES[kind]),
                 plate && h("div", { class: "plate" }, plate),
               ];
-              return booking
-                ? h(
-                    "button",
-                    {
-                      class: "slot",
-                      type: "button",
-                      "data-state": kind,
-                      title: `Check out ${plate || booking.numberplate}`,
-                      "data-booking": booking.id,
-                      onclick: () => prefillExit(plate || booking.numberplate),
-                    },
-                    tile
-                  )
-                : h("div", { class: "slot", "data-state": kind }, tile);
+              return h(
+                "button",
+                {
+                  class: "slot",
+                  type: "button",
+                  "data-state": kind,
+                  "data-slot": slot.id,
+                  title: `View or edit ${slot.name}`,
+                  onclick: () => openSlotDialog(slot.id),
+                },
+                tile
+              );
             })
         )
       )
@@ -406,10 +404,104 @@ function checkOut(booking) {
   return doExit(booking.numberplate, "NA", null);
 }
 
-function prefillExit(plate) {
-  selectTab("gate", "exit");
-  $("exit-plate").value = plate;
-  $("exit-plate").focus();
+// ---- slot dialog ----------------------------------------------------------
+
+const BOOKING_LABELS = { assigned: "Assigned, not parked yet", parked: "Parked" };
+
+function slotFact(label, value) {
+  return h("div", { class: "fact" }, h("dt", {}, label), h("dd", {}, value));
+}
+
+function openSlotDialog(slotId) {
+  const slot = state.slots.find((s) => s.id === slotId);
+  if (!slot) return;
+  const dialog = $("slot-dialog");
+  const plate = slot.numberplate || "";
+  const assigned = Boolean(slot.digitalstatus);
+
+  const name = h("input", { id: "slot-name", value: slot.name, required: true, autocomplete: "off" });
+  const floor = h("input", { id: "slot-floor", value: slot.floor, required: true, autocomplete: "off" });
+  const digital = h(
+    "select",
+    { id: "slot-digital" },
+    h("option", { value: "0", selected: !assigned }, "Free"),
+    h("option", { value: "1", selected: assigned }, "Assigned")
+  );
+  const plateInput = h("input", {
+    id: "slot-plate",
+    value: plate,
+    autocapitalize: "characters",
+    spellcheck: false,
+    autocomplete: "off",
+    placeholder: "No car assigned",
+  });
+  const error = h("div", { class: "login-error", role: "alert" });
+
+  // Keep the two fields consistent: a plate means assigned, free means no plate.
+  plateInput.addEventListener("input", () => {
+    digital.value = plateInput.value.trim() ? "1" : "0";
+  });
+  digital.addEventListener("change", () => {
+    if (digital.value === "0") plateInput.value = "";
+  });
+
+  const formEl = h(
+    "form",
+    { class: "slot-form", method: "dialog" },
+    h("h2", {}, `Slot ${slot.name}`),
+    h("label", { for: "slot-name" }, "Name"),
+    name,
+    h("label", { for: "slot-floor" }, "Floor"),
+    floor,
+    h("label", { for: "slot-digital" }, "Digital status"),
+    digital,
+    h("label", { for: "slot-plate" }, "Assigned number plate"),
+    plateInput,
+    h("p", { class: "hint" }, "Enter a plate to assign this slot to that car. Clear it to free the slot."),
+    h(
+      "dl",
+      { class: "facts" },
+      slotFact("Sensor", slot.physicalstatus ? "Car detected" : "Empty"),
+      slotFact("Sensor link", slot.sensor_state && slot.sensor_state !== "ok" ? "Not responding" : "OK"),
+      slotFact("Booking", slot.booking_status ? BOOKING_LABELS[slot.booking_status] || slot.booking_status : "None")
+    ),
+    error,
+    h(
+      "div",
+      { class: "dialog-actions" },
+      h("button", { class: "btn", type: "button", onclick: () => dialog.close() }, "Cancel"),
+      h("button", { class: "btn btn-primary", type: "submit" }, "Save")
+    )
+  );
+
+  formEl.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const body = {};
+    if (name.value.trim() !== slot.name) body.name = name.value;
+    if (floor.value.trim() !== slot.floor) body.floor = floor.value;
+    if (plateOf(plateInput.value) !== plate.toUpperCase()) body.number_plate = plateOf(plateInput.value);
+    if (Number(digital.value) !== Number(assigned)) body.digitalstatus = digital.value === "1";
+    if (Object.keys(body).length === 0) {
+      dialog.close();
+      return;
+    }
+    const save = formEl.querySelector("button[type=submit]");
+    save.disabled = true;
+    error.textContent = "";
+    try {
+      await call(`/parking-slots/${encodeURIComponent(slot.id)}`, { method: "PUT", body });
+      dialog.close();
+      refresh();
+    } catch (err) {
+      error.textContent = err.message;
+    } finally {
+      save.disabled = false;
+    }
+  });
+
+  dialog.replaceChildren(formEl);
+  dialog.showModal();
+  plateInput.focus();
 }
 
 async function resolveAlert(id) {

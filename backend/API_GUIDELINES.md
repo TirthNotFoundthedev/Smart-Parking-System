@@ -42,6 +42,7 @@ missing key and `503` when `PARKING_GATEWAY_KEY` is not set on the server.
 | `GET` | `/parking-status?number_plate=` | Public | Active parking, minutes parked and cost for a plate. |
 | `GET` | `/availability` | Public | Free and total slots per floor. |
 | `GET` | `/my-slot?plate=` | Public | Where did I park (rate limited). |
+| `PUT` | `/parking-slots/{slot_id}` | Guard | Edit a slot: name, floor, digital status and assigned number plate. |
 | `PUT` | `/sensor/slots/{slot_id}` | Public | Set a slot's physical occupancy (simulator/hardware shortcut). |
 | `POST` | `/guard/login` | Public | Exchange guard credentials for a bearer token. |
 | `POST` | `/gate-entry` | Guard | Find or create a user and book a slot. |
@@ -84,6 +85,20 @@ Every slot, including occupied and unavailable ones. The array may be empty.
 - `sensor_state` is `ok`, `unknown` (node offline) or `fault`.
 - `numberplate` and `booking_status` (`assigned` or `parked`) come from the
   active booking when `digitalstatus` is `1`; both are `null` otherwise.
+
+### `PUT /parking-slots/{slot_id}` (guard)
+
+Send any of these fields; omitted fields are left alone.
+
+| Field | Type | Effect |
+| --- | --- | --- |
+| `name` | string | Rename the slot (not blank). |
+| `floor` | string | Move the slot to another floor (not blank). |
+| `number_plate` | string | A plate assigns the slot to that car (creating the user if new) and replaces any current holder. `""` or `"NA"` releases the slot. |
+| `digitalstatus` | boolean | `false` releases the holder. `true` needs a plate unless the slot is already held. |
+
+Assigning writes a log row and a booking (`parked` if the sensor already sees a car, else `assigned`). Releasing closes the log and cancels the booking. Returns the updated slot as in `GET /parking-slots`.
+Errors: `400` blank name/floor, plate with `digitalstatus: false`, or `digitalstatus: true` with no plate; `404` unknown slot; `409` plate already assigned to another slot.
 
 ### `GET /availability`
 
